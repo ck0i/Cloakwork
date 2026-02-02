@@ -4,7 +4,7 @@
 
 > Inspired by [obfusheader.h](https://github.com/ac3ss0r/obfusheader.h) and Zapcrash's nimrodhide.h
 
-**Author:** helz.dev on Discord
+**Author:** ck0i on Discord
 **License:** MIT
 
 ***
@@ -726,7 +726,7 @@ All features are **header-only** and are **Windows-focused** (with advanced anti
 ## Credits
 
 - Inspired by legendary tools: obfusheader.h, nimrodhide.h, and the anti-re tools of unknowncheats.
-- Created by helz.dev/Helzky / Discord: `helz.dev`
+- Created by helz.dev/Helzky / Discord: `ck0i`
 - Open for contributions and issues!
 
 ***
@@ -740,3 +740,4 @@ MIT License -- do what you want, no warranty.
 **Cloakwork: Ultra-obfuscated, ultra-useful... Happy hiding!**
 
 ---
+
