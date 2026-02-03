@@ -11,7 +11,7 @@
 //╚██████╗███████╗╚██████╔╝██║  ██║██║  ██╗╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗
 // ╚═════╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
 
-// Created by @ck0i on Discord.
+// Created by @helz.dev on Discord.
 // Inspiration from obfusheader.h and Zapcrash's nimrodhide.h
 
 // =================================================================
@@ -887,7 +887,7 @@ namespace cloakwork {
 #if CW_ENABLE_COMPILE_TIME_RANDOM
     namespace detail {
         template<size_t N>
-        consteval uint32_t fnv1a_hash(const char (&str)[N], uint32_t basis = 0x811c9dc5) {
+        constexpr uint32_t fnv1a_hash(const char (&str)[N], uint32_t basis = 0x811c9dc5) {
             uint32_t hash = basis;
             for(size_t i = 0; i < N-1; ++i) {
                 hash ^= static_cast<uint32_t>(str[i]);
@@ -1044,7 +1044,7 @@ namespace cloakwork {
     #define CW_RAND_CT(min, max) ((min) + (CW_RANDOM_CT() % ((max) - (min) + 1)))
 
 #else
-        consteval uint32_t compile_seed() {
+        constexpr uint32_t compile_seed() {
             constexpr uint32_t time_hash = fnv1a_hash(__TIME__);
             constexpr uint32_t date_hash = fnv1a_hash(__DATE__);
             constexpr uint32_t file_hash = fnv1a_hash(__FILE__);
@@ -1053,10 +1053,10 @@ namespace cloakwork {
 
         template<uint32_t Seed>
         struct random_generator {
-            static consteval uint32_t value() {
+            static constexpr uint32_t value() {
                 return (Seed * 1664525u + 1013904223u) ^ __COUNTER__;
             }
-            static consteval uint32_t next() {
+            static constexpr uint32_t next() {
                 return random_generator<value()>::value();
             }
         };
@@ -1243,7 +1243,7 @@ namespace cloakwork {
 
     #define CW_ADSTR(name, str) \
         static constexpr cloakwork::internal_cipher::encrypted_buf< \
-            __LINE__ * 0x45D9F3Bu + sizeof(str) * 0x9E3779B9u, sizeof(str)> \
+            __LINE__ * 0x45D9F3Bu + static_cast<uint32_t>(sizeof(str)) * 0x9E3779B9u, sizeof(str)> \
             _cw_adenc_##name(str); \
         char name[sizeof(str)]; \
         cloakwork::internal_cipher::decrypt_to_stack(_cw_adenc_##name, name)
