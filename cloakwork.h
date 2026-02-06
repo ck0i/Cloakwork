@@ -2511,8 +2511,8 @@ namespace cloakwork {
                     CW_LOCK_GUARD(mutex);
                     if (decrypted.load(CW_MO_RELAXED)) {
                         auto& mutable_data = const_cast<std::array<char, N>&>(data);
-                        xtea::encrypt_buffer(mutable_data.data(), N, current_key);
                         rekey();
+                        xtea::encrypt_buffer(mutable_data.data(), N, current_key);
                         xtea::decrypt_buffer(mutable_data.data(), N, current_key);
                     }
                 }
