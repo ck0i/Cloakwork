@@ -498,6 +498,9 @@ Refer to the README.md for usage.
                 PVOID PatchInformation;
             };
         }
+    #else
+        #include <cstdint>
+        #include <cpuid.h>
     #endif
 
     #define CW_ATOMIC(T) std::atomic<T>
@@ -519,13 +522,16 @@ Refer to the README.md for usage.
     #define CW_OPT_ON __pragma(optimize("", on))
     #pragma warning(push)
     #pragma warning(disable: 4996 4244 4267)
+    #define CW_RDSEED
 #elif defined(__GNUC__) || defined(__clang__)
+
     #define CW_FORCEINLINE __attribute__((always_inline)) inline
     #define CW_NOINLINE __attribute__((noinline))
     #define CW_SECTION(x) __attribute__((section(x)))
     #define CW_COMPILER_BARRIER() asm volatile("" ::: "memory")
     #define CW_OPT_OFF _Pragma("GCC push_options") _Pragma("GCC optimize(\"O0\")")
     #define CW_OPT_ON _Pragma("GCC pop_options")
+    #define CW_RDSEED __attribute__((target("rdseed")))
 #else
     #define CW_FORCEINLINE inline
     #define CW_NOINLINE
@@ -533,6 +539,7 @@ Refer to the README.md for usage.
     #define CW_COMPILER_BARRIER() std::atomic_signal_fence(std::memory_order_seq_cst)
     #define CW_OPT_OFF
     #define CW_OPT_ON
+    #define CW_RDSEED
 #endif
 
 // =================================================================
@@ -838,14 +845,18 @@ namespace cloakwork {
         }
 
         inline bool try_hardware_random(uint64_t& out) {
-#ifdef _WIN32
-#ifdef __RDSEED__
-            if (_rdseed64_step(reinterpret_cast<unsigned long long*>(&out))) {
-                return true;
-            }
+            static bool has_rdseed = [] {
+#if defined(_MSC_VER)
+                int cpuInfo[4];
+                __cpuidex(cpuInfo, 7, 0);
+                return (cpuInfo[1] & (1 << 18)) != 0;
+#elif defined(__GNUC__) || defined(__clang__)
+                unsigned int eax, ebx, ecx, edx;
+                return __get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx) && (ebx & (1 << 18)) != 0;
 #endif
-#endif
-            return false;
+            }();
+
+            return has_rdseed && _rdseed64_step(reinterpret_cast<unsigned long long*>(&out));
         }
 
         // not cryptographic - just makes runtime keys unique per execution
