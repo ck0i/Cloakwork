@@ -1,6 +1,10 @@
 # Cloakwork
 
-Cloakwork is a header-only C++20 obfuscation library for Windows. It provides comprehensive protections against static and dynamic analysis -- string encryption, value obfuscation, control flow flattening, anti-debug, anti-VM, import hiding, direct syscalls, and more. No external dependencies or build step: drop in a single header and go. On MSVC, the header auto-links the Windows system libraries it uses. Supports both user mode and kernel mode drivers.
+Cloakwork is a single-header C++20 obfuscation library for Windows. Include `cloakwork.h` to use encoded strings and values, mixed Boolean arithmetic, control-flow wrappers, and an explicit integer bytecode VM. Existing Windows integration APIs remain available. MSVC auto-links the Windows libraries used by the header.
+
+The current regression target is MSVC x64. Kernel interfaces remain in the header but are not covered by the user-mode test suite.
+
+Obfuscation changes how code and data appear in a binary. It does not keep secrets from someone who can inspect the running process. The custom transforms and embedded keys are recoverable; additional rounds, product terms, or bytecode do not establish cryptographic security or measured resistance to a decompiler.
 
 > Inspired by [obfusheader.h](https://github.com/ac3ss0r/obfusheader.h), Zapcrash's nimrodhide.h, and qengine.
 
@@ -69,7 +73,7 @@ Define feature macros **before** including the header. All features are enabled 
 | Macro | Description | Default |
 |-------|-------------|---------|
 | `CW_ENABLE_ALL` | Master on/off switch | `1` |
-| `CW_ENABLE_STRING_ENCRYPTION` | XTEA compile-time string encryption | `1` |
+| `CW_ENABLE_STRING_ENCRYPTION` | Compile-time string encoding | `1` |
 | `CW_ENABLE_VALUE_OBFUSCATION` | Integer/value obfuscation and MBA | `1` |
 | `CW_ENABLE_CONTROL_FLOW` | Control flow obfuscation | `1` |
 | `CW_ENABLE_ANTI_DEBUG` | Anti-debugging features | `1` |
@@ -81,6 +85,7 @@ Define feature macros **before** including the header. All features are enabled 
 | `CW_ENABLE_SYSCALLS` | Direct syscall invocation | `1` |
 | `CW_ENABLE_ANTI_VM` | Anti-VM/sandbox detection | `1` |
 | `CW_ENABLE_INTEGRITY_CHECKS` | Code integrity verification | `1` |
+| `CW_BUILD_SEED` | Shared build seed for reproducible encodings | `0xC10A2026u` |
 | `CW_ANTI_DEBUG_RESPONSE` | Debugger response: 0=ignore, 1=crash, 2=fake data | `1` |
 
 If you disable `CW_ENABLE_ALL` and selectively re-enable features, Cloakwork
@@ -98,11 +103,11 @@ loaded PE images for gadgets and exports.
 
 | Macro | Description |
 |-------|-------------|
-| `CW_STR(s)` | XTEA-encrypted string, decrypts at runtime |
-| `CW_STR_LAYERED(s)` | Multi-layer encryption with polymorphic re-encryption |
-| `CW_STR_STACK(s)` | Stack-based encryption with automatic secure wipe on scope exit |
+| `CW_STR(s)` | Compile-time encoded string with a stable runtime plaintext cache |
+| `CW_STR_LAYERED(s)` | Two encoding passes with separate keys and a stable plaintext cache |
+| `CW_STR_STACK(s)` | Decrypt into an owning local buffer; wipe that buffer on destruction |
 | `CW_WSTR(s)` | Wide string (wchar_t) encryption |
-| `CW_STACK_STR(name, ...)` | Char-by-char stack builder, no string literal in binary |
+| `CW_STACK_STR(name, ...)` | Char-by-char initializer; the compiler may emit a literal |
 
 ### String Hashing
 
@@ -155,8 +160,8 @@ loaded PE images for gadgets and exports.
 | `CW_IF(cond)` | Obfuscated branching with opaque predicates |
 | `CW_ELSE` | Obfuscated else clause |
 | `CW_BRANCH(cond)` | Indirect branching with obfuscation |
-| `CW_FLATTEN(func, ...)` | Control flow flattening via state machine |
-| `CW_PROTECT(ret_type, body)` | Wrap code in an encrypted state machine dispatcher |
+| `CW_FLATTEN(func, ...)` | Invoke a callable through a dispatcher |
+| `CW_PROTECT(ret_type, body)` | Invoke a native C++ body through a dispatcher |
 | `CW_PROTECT_VOID(body)` | Void variant of `CW_PROTECT` |
 | `CW_JUNK()` | Insert junk computation |
 | `CW_JUNK_FLOW()` | Insert junk with fake control flow |
@@ -165,7 +170,7 @@ loaded PE images for gadgets and exports.
 
 | Macro | Description |
 |-------|-------------|
-| `CW_CALL(func)` | XTEA-encrypted function pointer with decoy arrays |
+| `CW_CALL(func)` | Runtime-encoded function pointer with decoy arrays |
 | `CW_SPOOF_CALL(func)` | Call with spoofed return address |
 | `CW_RET_GADGET()` | Cached ret gadget in ntdll for return address spoofing |
 
@@ -190,7 +195,7 @@ loaded PE images for gadgets and exports.
 | Macro | Description |
 |-------|-------------|
 | `CW_SCATTER(x)` | Heap-scattered data across multiple allocations |
-| `CW_POLY(x)` | Polymorphic mutating wrapper |
+| `CW_POLY(x)` | Encoded arithmetic storage, rekeyed every 100 reads or explicitly with `.rekey()` |
 
 ### Anti-Debug
 
@@ -231,7 +236,7 @@ For individual checks, use `cloakwork::anti_debug::anti_vm`: hypervisor detectio
 
 | Macro | Description |
 |-------|-------------|
-| `CW_RANDOM_CT()` | Compile-time random value (unique per build) |
+| `CW_RANDOM_CT()` | Compile-time value derived from the build seed and expansion location |
 | `CW_RAND_CT(min, max)` | Compile-time random in range |
 | `CW_RANDOM_RT()` | Runtime random value (multi-source entropy) |
 | `CW_RAND_RT(min, max)` | Runtime random in range |
@@ -250,11 +255,80 @@ For individual checks, use `cloakwork::anti_debug::anti_vm`: hypervisor detectio
 
 ---
 
+## Compatibility and storage contracts
+
+The public macro names remain available. Recompile all translation units after replacing the header; the class layouts have changed. Use the same feature definitions and `CW_BUILD_SEED` in every translation unit. The default seed is deterministic. For different encodings per release, set a new shared seed in the build configuration, for example `/DCW_BUILD_SEED=0x12AB34CDu`. The seed is not secret. Internal defaults no longer depend on include-time `__COUNTER__` state or compilation time.
+
+`CW_INT`, `CW_MBA`, and `CW_POLY` retain `.get()`, `.set()`, and implicit value conversion. Their reads and writes now use a mutex, and they support copying. This adds synchronization overhead. `CW_INT` and `CW_POLY` preserve floating-point representations, including negative zero and NaN payloads. Their encoded storage uses byte Feistel transforms; `CW_POLY` replaces its keys and encoded bytes without changing the decoded value. These value wrappers no longer perform implicit periodic debugger checks. Use the explicit anti-debug API when that behavior is required.
+
+`CW_ADD`, `CW_SUB`, `CW_AND`, `CW_OR`, `CW_XOR`, and `CW_NEG` evaluate each operand once. Integer promotions apply to macro results. Addition, subtraction, and negation wrap at the result width, including signed results; they do not use signed overflow internally. Direct typed `mba` helpers retain the requested width. Addition includes product-based variants with volatile intermediates. These expressions remain algebraically simplifiable. Comparisons preserve native mixed-type conversions and NaN ordering. `CW_RAND_CT` and `CW_RAND_RT` evaluate each bound once, support the full integer range, and reject reversed bounds. They use modulo mapping and are not guaranteed to be uniformly distributed.
+
+`CW_STR`, `CW_STR_LAYERED`, and `CW_WSTR` return a pointer that remains valid until the macro's static object is destroyed. After first use, that object's plaintext cache remains readable and is never rekeyed in place. The cache is wiped on destruction. The layered variant now performs two encoding passes instead of briefly rewriting plaintext while other callers might be reading it.
+
+Keep stack strings in a named variable:
+
+```cpp
+auto secret = CW_STR_STACK("local plaintext");
+consume(secret.get());
+```
+
+The immutable static payload is decoded directly into `secret`, without populating a static plaintext cache. Its owned buffer is wiped on destruction. Copies own separate buffers. Getting a pointer from an unnamed temporary is now a compile error, preventing the common dangling-pointer form `const char* p = CW_STR_STACK("text");`. Wiping owned buffers cannot erase copies made by application code, registers, or the operating system.
+
+`CW_SCATTER` accepts trivially copyable types. It commits a replacement only after all allocations succeed. It does not prevent a process memory dump. Destroying any wrapper while another thread uses it remains invalid.
+
+`CW_FLATTEN` and `CW_PROTECT` preserve void, reference, and move-only returns, and propagate exceptions. A protected body remains native C++ inside a callable. Its internal branches are not converted into bytecode or flattened automatically. `CW_CALL` also accepts function-pointer variables and preserves reference returns. Metamorphic function calls retain ownership of an executable page until the call completes, so regeneration cannot free a page that another caller still uses. The initializer-list constructor continues to use the first function; empty lists are rejected when metamorphic protection is enabled.
+
+As before, disabling features can make their macros return raw values instead of wrappers. Do not depend on `.get()` when compiling those macros with their feature disabled. The explicit integer VM remains available in user mode even with `CW_ENABLE_ALL=0`; its execution semantics do not depend on the protection flags.
+
+## Integer virtualization
+
+Use `cloakwork::vm::make_program` for code you explicitly express as instructions. The VM has unsigned 64-bit registers, modular arithmetic, bitwise operations, rotation, comparison, and branches. It has no arbitrary memory access or native-call instruction.
+
+```cpp
+using cloakwork::vm::instruction;
+using op = cloakwork::vm::opcode;
+
+// Compute x * 2 + 5. Each instruction is {opcode, destination, a, b, immediate}.
+static constexpr auto calculation = cloakwork::vm::make_program<CW_RANDOM_CT()>(std::array{
+    instruction{op::argument, 0, 0, 0, 0},
+    instruction{op::constant, 1, 0, 0, 2},
+    instruction{op::mul, 0, 0, 1},
+    instruction{op::constant, 1, 0, 0, 5},
+    instruction{op::add, 0, 0, 1},
+    instruction{op::ret, 0, 0}
+});
+
+auto answer = calculation.run(std::array{uint64_t{10}});
+if (answer) consume(answer.value); // 25
+```
+
+The seed selects opcode numbering, register layout, and encoding masks for each instruction word. Programs are immutable and safe to run concurrently. Every run starts with zeroed registers and wipes its register array on exit. Opcode and register encodings are reversible, and decoded operands still exist during execution.
+
+`make_program<Seed, Registers>` defaults to 8 registers; valid counts are powers of two from 1 through 256. All register fields must be in range, including unused fields. `constant` loads `immediate`; `argument` loads the argument at that index. Binary operations read registers `a` and `b` into `dst`. `move` copies `a`. `less` performs unsigned comparison and writes 0 or 1. `rotate_left` uses the low 6 bits of `b`. `jump` sets the instruction index to `immediate`; `jump_zero` does so when register `a` is zero. `ret` returns register `a`.
+
+Construction rejects invalid opcodes, registers, branch targets, and programs without a return instruction at compile time. Unreachable returns are allowed, so runtime execution is bounded. `run(arguments, budget)` defaults to 100,000 instructions. The returned `result` contains `value`, `status`, and `steps`; check it before using `value`. Errors are `missing_argument`, `invalid_instruction`, and `step_limit`. Falling off the program is an error. Return instructions count toward the budget. This VM is not a security sandbox for hostile bytecode.
+
+## Build and test
+
+The library still needs only the header. CMake builds the regression tests and, optionally, the demonstration:
+
+```powershell
+cmake -S . -B build -A x64 -DCLOAKWORK_BUILD_DEMO=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+To check whole-program optimization, configure a separate directory with `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`. The suite covers 8 integer widths and signedness combinations, every byte/key pair in the value transform, floating-point bit patterns, VM operations and error paths, multi-file linking, concurrent access, and individual feature configurations. Configuration also checks that four invalid VM programs fail to compile. If Python is available, a binary probe verifies that three test literals are absent from the executable and decode correctly when run.
+
+These tests validate behavior and those specific binary probes. They do not measure resistance to symbolic simplification, devirtualization, debugging, or memory inspection. Legacy anti-debug, anti-VM, syscall, import, return-address, and PE-editing features have not received a complete security audit in this refactor.
+
+---
+
 ## Kernel Mode
 
 I'd recommend you use my other library [Kernelcloak](https://github.com/ck0i/Kernelcloak) for kernel work, it is much more in depth and Cloakwork doesn't really suit kernel work as much as other libraries do. However, if you choose to still use Cloakwork, here you go:
 
-Kernel mode is auto-detected when WDK headers are present (`_KERNEL_MODE`, `NTDDI_VERSION`, `_NTDDK_`, `_WDMDDK_`), or forced with `#define CW_KERNEL_MODE 1`.
+Kernel mode is selected by `_KERNEL_MODE` or forced with `#define CW_KERNEL_MODE 1`. Include the WDK headers first. This path has not been validated by the current tests.
 
 ### Feature Availability
 
