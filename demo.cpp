@@ -32,7 +32,7 @@ struct secret_data {
 };
 
 int main() {
-    CW_SCRUB_DEBUG_IMPORTS();
+    // CW_SCRUB_DEBUG_IMPORTS() modifies the process IAT; invoke it explicitly if needed.
 
     std::cout << CW_STR("=== CLOAKWORK COMPREHENSIVE DEMO ===") << std::endl;
     std::cout << CW_STR("demonstrating obfuscation, encryption, and anti-debug features") << std::endl;
@@ -43,7 +43,7 @@ int main() {
     // ==================================================================
     std::cout << CW_STR("[1] String Encryption Demo") << std::endl;
 
-    // strings are encrypted at compile-time with unique per-execution keys
+    // strings use compile-time keys derived from the shared build seed
     const char* encrypted_msg = CW_STR("this string is encrypted at compile-time!");
     std::cout << CW_STR("   encrypted: ") << encrypted_msg << std::endl;
 
@@ -55,15 +55,15 @@ int main() {
     // ==================================================================
     std::cout << CW_STR("[2] Enhanced String Encryption Demo") << std::endl;
 
-    // multi-layer encrypted string (3 encryption layers + polymorphic re-encryption)
-    const char* layered_msg = CW_STR_LAYERED("triple-layer encrypted string with polymorphic decryption!");
+    // two encoding passes, with a stable plaintext cache after first access
+    const char* layered_msg = CW_STR_LAYERED("two-pass encoded string with stable pointer lifetime");
     std::cout << CW_STR("   layered encryption: ") << layered_msg << std::endl;
 
     // stack-based encrypted string (auto-clears on scope exit)
     {
         auto stack_msg = CW_STR_STACK("this string auto-clears when leaving scope");
         std::cout << CW_STR("   stack-based encryption: ") << stack_msg.get() << std::endl;
-        std::cout << CW_STR("   (buffer will be overwritten with random data on scope exit)") << std::endl;
+        std::cout << CW_STR("   (owned buffer will be zeroed on scope exit)") << std::endl;
     }
 
     std::cout << std::endl;
@@ -131,7 +131,7 @@ int main() {
     auto poly_value = CW_POLY(12345);
     std::cout << CW_STR("   polymorphic value: ") << static_cast<int>(poly_value) << std::endl;
 
-    // scattered across memory - prevents memory dumping
+    // scattered across allocations; memory inspection can still recover it
     secret_data my_data = { 1001, 5, static_cast<int>(0xDEADBEEF) };
     auto scattered = CW_SCATTER(my_data);
     secret_data retrieved = scattered.get();
@@ -652,7 +652,7 @@ int main() {
     std::cout << "    - " << CW_STR("anti-VM/sandbox detection") << std::endl;
     std::cout << "    - " << CW_STR("code integrity verification / hook detection") << std::endl;
 
-    std::cout << "    - " << CW_STR("XTEA-based string encryption (replaces XOR)") << std::endl;
+    std::cout << "    - " << CW_STR("compile-time string encoding with scoped plaintext buffers") << std::endl;
     std::cout << "    - " << CW_STR("indirect syscall invocation") << std::endl;
     std::cout << "    - " << CW_STR("PE header erasure") << std::endl;
     std::cout << "    - " << CW_STR("stack string builder") << std::endl;

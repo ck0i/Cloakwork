@@ -2,7 +2,7 @@
 #define CLOAKWORK_H
 
 // Cloakwork advanced obfuscation library - header-only c++20 implementation
-// Comprehensive protection against static and dynamic analysis
+// Source-level obfuscation helpers; see README.md for limits and supported builds.
 
 // ██████╗██╗      ██████╗  █████╗ ██╗  ██╗██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗
 //██╔════╝██║     ██╔═══██╗██╔══██╗██║ ██╔╝██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝
@@ -89,6 +89,14 @@ Refer to the README.md for usage.
     #endif
     #define CW_ENABLE_CONTROL_FLOW 0
 #endif
+
+#ifndef CW_BUILD_SEED
+    #define CW_BUILD_SEED 0xC10A2026u
+#endif
+
+// Stable within this header, independent of the includer's counter state.
+#define CW_DETAIL_RANDOM_CT() (static_cast<uint32_t>(CW_BUILD_SEED) ^ (static_cast<uint32_t>(__LINE__) * 0x9E3779B9u))
+#define CW_DETAIL_RAND_CT(min, max) ((min) + (CW_DETAIL_RANDOM_CT() % ((max) - (min) + 1)))
 
 #ifndef CW_ENABLE_ALL
     #define CW_ENABLE_ALL 1
@@ -486,6 +494,11 @@ Refer to the README.md for usage.
 
 #else
     #include <array>
+    #include <cstdint>
+    #include <functional>
+    #include <stdexcept>
+    #include <limits>
+    #include <span>
     #include <vector>
     #include <algorithm>
     #include <atomic>
@@ -555,7 +568,7 @@ Refer to the README.md for usage.
     #define CW_NOINLINE __declspec(noinline)
     #define CW_SECTION(x) __declspec(allocate(x))
     #define CW_COMPILER_BARRIER() _ReadWriteBarrier()
-    // optimization barriers - prevents LTCG/WPO from seeing through obfuscation
+    // Optimization controls for supported compiler paths.
     #define CW_OPT_OFF __pragma(optimize("", off))
     #define CW_OPT_ON __pragma(optimize("", on))
     #pragma warning(push)
@@ -588,299 +601,41 @@ Refer to the README.md for usage.
     #pragma clang diagnostic ignored "-Wbitwise-instead-of-logical"
 #endif
 
-// =================================================================
-// CLOAKWORK QUICK REFERENCE WIKI
-// =================================================================
-//
-// STRING ENCRYPTION
-// -----------------
-// CW_STR("text")                   - encrypts string at compile-time, decrypts at runtime
-//                                    usage: const char* msg = CW_STR("secret message");
-//
-// CW_STR_LAYERED("text")           - multi-layer encrypted string with polymorphic re-encryption
-//                                    usage: const char* msg = CW_STR_LAYERED("secret");
-//
-// CW_STR_STACK("text")              - stack-based encrypted string (auto-cleanup)
-//                                    usage: auto msg = CW_STR_STACK("secret");
-//
-// INTEGER/VALUE OBFUSCATION
-// -------------------------
-// CW_INT(value)                    - obfuscates integer/numeric values
-//                                    usage: int x = CW_INT(42);
-//
-// CW_ADD(a, b)                     - obfuscated addition using MBA
-//                                    usage: int sum = CW_ADD(x, y);
-//
-// CW_SUB(a, b)                     - obfuscated subtraction using MBA
-//                                    usage: int diff = CW_SUB(x, y);
-//
-// CW_SCATTER(value)                - scatters data across memory chunks
-//                                    usage: auto scattered = CW_SCATTER(myStruct);
-//
-// CW_POLY(value)                   - creates polymorphic value that mutates internally
-//                                    usage: auto poly = CW_POLY(100);
-//
-// BOOLEAN OBFUSCATION
-// -------------------
-// CW_TRUE                          - obfuscated true using opaque predicates
-//                                    usage: if (CW_TRUE) { /* always executes */ }
-//
-// CW_FALSE                         - obfuscated false using opaque predicates
-//                                    usage: if (CW_FALSE) { /* never executes */ }
-//
-// CW_BOOL(expr)                    - obfuscates a boolean expression
-//                                    usage: bool result = CW_BOOL(x > 0);
-//
-// obfuscated_bool                  - class for storing obfuscated boolean values
-//                                    usage: obfuscated_bool flag(true);
-//
-// obfuscated_value<T>              - template class for obfuscating any value type
-//                                    usage: obfuscated_value<int> val(42);
-//
-// mba_obfuscated<T>                - mixed boolean arithmetic obfuscation
-//                                    usage: mba_obfuscated<int> val(42);
-//
-// CONTROL FLOW OBFUSCATION
-// ------------------------
-// CW_IF(condition)                 - obfuscated if statement with opaque predicates
-//                                    usage: CW_IF(x > 0) { /* code */ }
-//
-// CW_ELSE                          - obfuscated else clause
-//                                    usage: CW_IF(cond) { } CW_ELSE { }
-//
-// CW_BRANCH(condition)             - indirect branching with obfuscation
-//                                    usage: CW_BRANCH(isValid) { /* code */ }
-//
-// CW_FLATTEN(func, args...)        - flattens control flow via state machine
-//                                    usage: auto result = CW_FLATTEN(myFunc, arg1, arg2);
-//
-// CFG FLATTENING (block-level state machine)
-// -------------------------------------------
-// CW_FLAT_FUNC(ret_type)           - begin flattened function returning ret_type
-//                                    usage: auto r = CW_FLAT_FUNC(int) ... CW_FLAT_END;
-//
-// CW_FLAT_VOID                     - begin void flattened function
-//                                    usage: CW_FLAT_VOID ... CW_FLAT_VOID_END;
-//
-// CW_FLAT_VARS(...)                - declare shared variables across blocks
-//                                    usage: CW_FLAT_VARS(int x = 0; int y = 0;)
-//
-// CW_FLAT_ENTRY(id)                - set entry block ID
-//                                    usage: CW_FLAT_ENTRY(0)
-//
-// CW_FLAT_BEGIN                    - begin dispatch loop (auto-inserts dead blocks)
-//
-// CW_FLAT_BLOCK(id)                - start a block with given ID
-//                                    usage: CW_FLAT_BLOCK(0) x = 42; CW_FLAT_GOTO(1)
-//
-// CW_FLAT_GOTO(id)                 - unconditional jump to block
-//                                    usage: CW_FLAT_GOTO(1)
-//
-// CW_FLAT_GOTO_OBF(id)             - obfuscated jump (adds fake dead-block branch)
-//                                    usage: CW_FLAT_GOTO_OBF(1)
-//
-// CW_FLAT_IF(cond, true_id, false_id) - conditional branch
-//                                    usage: CW_FLAT_IF(x > 0, 2, 3)
-//
-// CW_FLAT_IF_OBF(cond, t, f)       - obfuscated conditional (volatile + opaque pred)
-//                                    usage: CW_FLAT_IF_OBF(x > 0, 2, 3)
-//
-// CW_FLAT_RETURN(val)              - return value and exit
-//                                    usage: CW_FLAT_RETURN(x * 2)
-//
-// CW_FLAT_EXIT()                   - exit without return value
-//                                    usage: CW_FLAT_EXIT()
-//
-// CW_FLAT_SWITCH2..4(expr, ...)    - multi-way dispatch (2-4 cases + default)
-//                                    usage: CW_FLAT_SWITCH3(cmd, 0,blk_a, 1,blk_b, 2,blk_c, blk_def)
-//
-// CW_FLAT_END                      - close dispatch loop (non-void)
-// CW_FLAT_VOID_END                 - close dispatch loop (void)
-//
-// SIMPLIFIED CFG PROTECTION (automatic state machine wrapping)
-// -------------------------------------------------------------
-// CW_PROTECT(ret_type, body)        - wraps code in encrypted state machine, returns ret_type
-//                                    usage: int r = CW_PROTECT(int, { return x * 2; });
-//
-// CW_PROTECT_VOID(body)             - wraps void code in encrypted state machine
-//                                    usage: CW_PROTECT_VOID({ do_work(); });
-//
-// FUNCTION CALL PROTECTION
-// ------------------------
-// CW_CALL(function)                - obfuscates function pointer and adds anti-debug
-//                                    usage: auto obf_func = CW_CALL(originalFunc);
-//                                           obf_func(args);
-//
-// obfuscated_call<Func>            - template class for function pointer obfuscation
-//                                    usage: obfuscated_call<decltype(func)> obf{func};
-//
-// ANTI-DEBUGGING/ANALYSIS
-// -----------------------
-// CW_ANTI_DEBUG()                  - crashes if debugger detected (comprehensive checks)
-//                                    usage: CW_ANTI_DEBUG();
-//
-//
-// anti_debug::is_debugger_present() - returns true if debugger detected (basic checks)
-//                                     usage: if(anti_debug::is_debugger_present()) { }
-//
-// anti_debug::comprehensive_check() - advanced multi-layered debugger detection
-//                                     usage: if(anti_debug::comprehensive_check()) { }
-//
-// anti_debug::timing_check(func)   - detects debuggers via timing analysis
-//                                    usage: if(timing_check([](){}, 1000)) { }
-//
-// anti_debug::verify_code_integrity() - checks if code has been modified
-//                                       usage: if(!verify_code_integrity(func, size)) { }
-//
-// COMPILE-TIME RANDOMIZATION
-// --------------------------
-// CW_RANDOM_CT()                   - generates compile-time random value (unique per build)
-//                                    usage: constexpr auto rand = CW_RANDOM_CT();
-//
-// CW_RANDOM_RT()                   - generates runtime random value (unique per execution)
-//                                    usage: uint64_t rand = CW_RANDOM_RT();
-//
-// CW_RAND_CT(min, max)             - compile-time random in range [min, max]
-//                                    usage: constexpr int x = CW_RAND_CT(1, 100);
-//
-// CW_RAND_RT(min, max)             - runtime random in range [min, max]
-//                                    usage: int x = CW_RAND_RT(1, 100);
-//
-// WIDE STRING ENCRYPTION
-// ----------------------
-// CW_WSTR(L"text")                  - encrypts wide string at compile-time
-//                                    usage: const wchar_t* msg = CW_WSTR(L"secret");
-//
-// STRING HASHING
-// --------------
-// CW_HASH("text")                   - compile-time FNV-1a hash of string (case-sensitive)
-//                                    usage: constexpr uint32_t h = CW_HASH("NtClose");
-//
-// CW_HASH_CI("text")                - compile-time case-insensitive hash (for module names)
-//                                    usage: constexpr uint32_t h = CW_HASH_CI("kernel32.dll");
-//
-// CW_HASH_WIDE(L"text")             - compile-time hash of wide string
-//                                    usage: constexpr uint32_t h = CW_HASH_WIDE(L"ntdll.dll");
-//
-// hash::fnv1a_runtime(str)          - runtime hash of string
-//                                    usage: uint32_t h = hash::fnv1a_runtime(dynamicStr);
-//
-// IMPORT HIDING
-// -------------
-// CW_IMPORT(mod, func)              - resolve function without import table
-//                                    usage: auto pFunc = CW_IMPORT("kernel32.dll", VirtualAlloc);
-//
-// imports::getModuleBase(hash)      - get module base by hash
-//                                    usage: void* ntdll = imports::getModuleBase(CW_HASH("ntdll.dll"));
-//
-// imports::getProcAddress(mod, hash) - get function by hash
-//                                     usage: void* func = imports::getProcAddress(mod, CW_HASH("NtClose"));
-//
-// DIRECT SYSCALLS
-// ---------------
-// CW_SYSCALL_NUMBER(func)           - get syscall number for ntdll function
-//                                    usage: uint32_t num = CW_SYSCALL_NUMBER(NtClose);
-//
-// syscall::getSyscallNumber(hash)   - get syscall number by function hash
-//                                    usage: uint32_t num = syscall::getSyscallNumber(CW_HASH("NtClose"));
-//
-// ANTI-VM/SANDBOX DETECTION
-// -------------------------
-// CW_ANTI_VM()                      - crashes if VM/sandbox detected
-//                                    usage: CW_ANTI_VM();
-//
-// CW_CHECK_VM()                     - returns true if VM/sandbox detected
-//                                    usage: if(CW_CHECK_VM()) { /* in VM */ }
-//
-// anti_vm::comprehensive_check()    - comprehensive VM/sandbox detection
-//                                    usage: if(anti_debug::anti_vm::comprehensive_check()) { }
-//
-// OBFUSCATED COMPARISONS
-// ----------------------
-// CW_EQ(a, b)                       - obfuscated equality check (a == b)
-//                                    usage: if(CW_EQ(x, 42)) { }
-//
-// CW_NE(a, b)                       - obfuscated not-equals (a != b)
-// CW_LT(a, b)                       - obfuscated less-than (a < b)
-// CW_GT(a, b)                       - obfuscated greater-than (a > b)
-// CW_LE(a, b)                       - obfuscated less-or-equal (a <= b)
-// CW_GE(a, b)                       - obfuscated greater-or-equal (a >= b)
-//
-// ENCRYPTED CONSTANTS
-// -------------------
-// CW_CONST(value)                   - encrypted compile-time constant
-//                                    usage: int x = CW_CONST(0xDEADBEEF);
-//
-// constants::runtime_constant<T>    - runtime-keyed constant (unique per execution)
-//                                    usage: runtime_constant<int> val(42);
-//
-// JUNK CODE INSERTION
-// -------------------
-// CW_JUNK()                         - insert junk computation
-//                                    usage: CW_JUNK();
-//
-// CW_JUNK_FLOW()                    - insert junk with fake control flow
-//                                    usage: CW_JUNK_FLOW();
-//
-// RETURN ADDRESS SPOOFING
-// -----------------------
-// CW_SPOOF_CALL(func)               - call with spoofed return address
-//                                    usage: auto spoof = CW_SPOOF_CALL(myFunc);
-//
-// spoof::getRetGadget()             - get cached ret gadget for spoofing
-//                                    usage: void* gadget = spoof::getRetGadget();
-//
-// INTEGRITY VERIFICATION
-// ----------------------
-// CW_INTEGRITY_CHECK(func, size)    - wrap function with integrity checking
-//                                    usage: auto checked = CW_INTEGRITY_CHECK(myFunc, 64);
-//
-// CW_DETECT_HOOK(func)              - check if function is hooked
-//                                    usage: if(CW_DETECT_HOOK(VirtualAlloc)) { /* hooked */ }
-//
-// integrity::computeHash(data, size) - compute hash of memory region
-//                                     usage: uint32_t h = integrity::computeHash(ptr, 100);
-//
-// integrity::verifyFunctions(...)   - verify multiple functions at once
-//                                    usage: if(!integrity::verifyFunctions(f1, f2)) { }
-//
-// CONVENIENCE MACROS & TYPE ALIASES
-// ----------------------------------
-// CW_IS_DEBUGGED()                  - is_debugger_present() (PEB + NtGlobalFlag)
-// CW_HAS_HWBP()                    - has_hardware_breakpoints() (DR0-DR3)
-// CW_CHECK_DEBUG()                  - comprehensive_check() (all anti-debug combined)
-// CW_DETECT_HIDING()               - detect anti-anti-debug tools (ScyllaHide etc.)
-// CW_DETECT_PARENT()               - check if parent is a debugger
-// CW_DETECT_KERNEL_DBG()           - kernel debugger detection
-// CW_TIMING_CHECK()                - rdtsc vs QPC timing check
-// CW_DETECT_DBG_ARTIFACTS()        - debugger registry artifacts
-// CW_DETECT_HYPERVISOR()           - hypervisor present (CPUID)
-// CW_DETECT_VM_VENDOR()            - VM vendor string detection
-// CW_DETECT_LOW_RESOURCES()        - low CPU/RAM (sandbox indicator)
-// CW_DETECT_SANDBOX_DLLS()         - sandbox DLL detection
-// CW_GET_MODULE(name)              - getModuleBase via PEB walk (string → hash)
-//                                    usage: void* ntdll = CW_GET_MODULE("ntdll.dll");
-// CW_GET_PROC(mod, func)           - getProcAddress via export walk (string → hash)
-//                                    usage: void* fn = CW_GET_PROC(ntdll, "NtClose");
-// CW_HASH_RT(str)                  - runtime FNV-1a hash (case-sensitive)
-// CW_HASH_RT_CI(str)               - runtime FNV-1a hash (case-insensitive)
-// CW_COMPUTE_HASH(ptr, size)       - compute hash of memory region
-// CW_VERIFY_FUNCS(...)             - verify multiple functions aren't hooked
-// CW_RET_GADGET()                  - get cached ret gadget for return address spoofing
-// CW_NEG(a)                        - obfuscated negation using MBA (~x + 1)
-//
-// Type aliases (in cloakwork namespace):
-// cloakwork::obf_bool               - shorthand for obfuscated_bool
-// cloakwork::meta_func<Sig>         - shorthand for metamorphic_function<Sig>
-// cloakwork::rt_const<T>            - shorthand for runtime_constant<T>
-//
-// =================================================================
+// Public API, lifetime contracts, and examples are documented in README.md.
 
 namespace cloakwork {
 
+#if !CW_KERNEL_MODE
+    template<typename T>
+    concept Integral = std::is_integral_v<T>;
+    template<typename T>
+    concept Arithmetic = std::is_arithmetic_v<T>;
+#endif
+
     namespace detail {
+#if !CW_KERNEL_MODE
+        inline void wipe(void* data, size_t size) noexcept {
+            auto bytes = static_cast<volatile uint8_t*>(data);
+            for (size_t i = 0; i < size; ++i) bytes[i] = 0;
+            CW_COMPILER_BARRIER();
+        }
+#endif
         template<typename T>
         using clean_value_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+#if !CW_KERNEL_MODE
+        template<typename A, typename B>
+        constexpr auto range_from_sample(A low, B high, uint64_t sample) {
+            static_assert(std::is_integral_v<A> && std::is_integral_v<B>, "Random bounds must be integers");
+            using R = decltype(low + high);
+            using U = std::make_unsigned_t<R>;
+            const R first = static_cast<R>(low), last = static_cast<R>(high);
+            if (first > last) throw std::invalid_argument("Cloakwork random bounds are reversed");
+            const U span = static_cast<U>(static_cast<U>(last) - static_cast<U>(first) + U{1});
+            const U offset = span == 0 ? static_cast<U>(sample) : static_cast<U>(sample % span);
+            return std::bit_cast<R>(static_cast<U>(static_cast<U>(first) + offset));
+        }
+#endif
 
         template<typename T>
         inline constexpr size_t default_scatter_chunks_v =
@@ -1029,7 +784,10 @@ namespace cloakwork {
             InterlockedExchange64(&state, x);
             return static_cast<uint64_t>(x) * 0x2545F4914F6CDD1DULL;
 #else
-            thread_local uint64_t state = runtime_entropy_seed();
+            thread_local uint64_t state = [] {
+                const uint64_t seed = runtime_entropy_seed();
+                return seed ? seed : 0x9E3779B97F4A7C15ULL;
+            }();
             uint64_t x = state;
             x ^= x >> 12;
             x ^= x << 25;
@@ -1070,10 +828,9 @@ namespace cloakwork {
 
         template<size_t FileN>
         consteval uint32_t compile_seed_impl(const char (&file)[FileN], uint32_t line, uint32_t counter) {
-            constexpr uint32_t time_hash = fnv1a_hash(__TIME__);
-            constexpr uint32_t date_hash = fnv1a_hash(__DATE__);
+            constexpr uint32_t build_seed = static_cast<uint32_t>(CW_BUILD_SEED);
             uint32_t file_hash = fnv1a_hash(file);
-            uint32_t seed = time_hash ^ (date_hash << 1) ^ (file_hash >> 1);
+            uint32_t seed = build_seed ^ (file_hash >> 1);
             seed ^= line * 0x01000193u;
             seed ^= counter * 0x9E3779B9u;
             return mix_compile_seed(seed);
@@ -1096,10 +853,18 @@ namespace cloakwork {
     #define CW_RANDOM_RT() (cloakwork::detail::runtime_entropy())
     #define CW_RAND_RT(min, max) ((min) + (CW_RANDOM_RT() % ((max) - (min) + 1)))
 #else
-    #define CW_RANDOM_CT() (rand())
-    #define CW_RAND_CT(min, max) ((min) + (rand() % ((max) - (min) + 1)))
+    #define CW_RANDOM_CT() (static_cast<uint32_t>(CW_BUILD_SEED) ^ (static_cast<uint32_t>(__LINE__) * 0x9E3779B9u) ^ static_cast<uint32_t>(__COUNTER__))
+    #define CW_RAND_CT(min, max) ((min) + (CW_RANDOM_CT() % ((max) - (min) + 1)))
     #define CW_RANDOM_RT() (rand())
     #define CW_RAND_RT(min, max) ((min) + (rand() % ((max) - (min) + 1)))
+#endif
+
+#if !CW_KERNEL_MODE
+    #undef CW_RAND_CT
+    #undef CW_RAND_RT
+    #define CW_RAND_CT(min, max) (cloakwork::detail::range_from_sample((min), (max), \
+        (static_cast<uint64_t>(CW_RANDOM_CT()) << 32) | CW_RANDOM_CT()))
+    #define CW_RAND_RT(min, max) (cloakwork::detail::range_from_sample((min), (max), CW_RANDOM_RT()))
 #endif
 
     namespace hash {
@@ -1305,7 +1070,7 @@ namespace cloakwork {
 
     #define CW_ADSTR(name, str) \
         static constexpr cloakwork::internal_cipher::encrypted_buf< \
-            (CW_HASH(str) ^ CW_COMPILE_SEED()), sizeof(str)> \
+            (CW_HASH(str) ^ CW_DETAIL_RANDOM_CT()), sizeof(str)> \
             _cw_adenc_##name(str); \
         char name[sizeof(str)]; \
         cloakwork::internal_cipher::decrypt_to_stack(_cw_adenc_##name, name)
@@ -2017,7 +1782,7 @@ namespace cloakwork {
                 if (has_hardware_breakpoints()) return true;
 
                 // threshold derived from compile-time random to prevent easy constant patching
-                constexpr uint64_t timing_threshold = 40000 + (CW_RANDOM_CT() % 20000);
+                constexpr uint64_t timing_threshold = 40000 + (CW_DETAIL_RANDOM_CT() % 20000);
                 bool timing_suspicious = timing_check([]() {
                     volatile int dummy = 0;
                     for (int i = 0; i < 100; i++) {
@@ -2680,680 +2445,113 @@ namespace cloakwork {
             }
         }
 
-        template<size_t N,
-                 uint32_t K0 = CW_RANDOM_CT(), uint32_t K1 = CW_RANDOM_CT(),
-                 uint32_t K2 = CW_RANDOM_CT(), uint32_t K3 = CW_RANDOM_CT()>
-        class encrypted_string {
-        private:
-            std::array<char, N> data;
-            mutable CW_ATOMIC(bool) decrypted{false};
-            mutable CW_MUTEX mutex;
-
-
-
-            // no reinterpret_cast - uses templated buffer functions for constexpr compatibility
-            static constexpr std::array<char, N> encrypt_string(const char* str) {
-                std::array<char, N> result{};
-                for (size_t i = 0; i < N; ++i) result[i] = str[i];
-                cipher::encrypt_buffer<K0, K1, K2, K3>(result.data(), N);
-                return result;
+        template<typename Char, size_t N, uint32_t K0, uint32_t K1,
+                 uint32_t K2, uint32_t K3, bool Layered = false>
+        struct literal_payload {
+            std::array<uint8_t, N * sizeof(Char)> bytes{};
+            constexpr literal_payload(const Char (&text)[N]) {
+                using U = std::make_unsigned_t<Char>;
+                for (size_t i = 0; i < N; ++i)
+                    for (size_t j = 0; j < sizeof(Char); ++j)
+                        bytes[i * sizeof(Char) + j] = static_cast<uint8_t>(static_cast<U>(text[i]) >> (j * 8));
+                cipher::encrypt_buffer<K0, K1, K2, K3>(bytes.data(), bytes.size());
+                if constexpr (Layered)
+                    cipher::encrypt_buffer<K3 ^ 0x9E3779B9u, K2, K1, K0>(bytes.data(), bytes.size());
             }
-
-        public:
-            template<size_t... I>
-            constexpr encrypted_string(const char (&str)[N], std::index_sequence<I...>)
-                : data(encrypt_string(str)), decrypted(false) {}
-
-            constexpr encrypted_string(const char (&str)[N])
-                : encrypted_string(str, std::make_index_sequence<N>{}) {}
-
-            //
-            // noinline prevents LTCG from constant-folding the decrypt.
-            // per-instantiation junk selected by K0/K2 bits creates size variance
-            // so these stubs don't all land at the same byte count in the binary.
-            //
-            CW_NOINLINE const char* get() const {
-                CW_COMPILER_BARRIER();
-                if constexpr ((K0 & 7u) == 0) {
-                    volatile uint32_t _p = K1; _p ^= _p >> 16; (void)_p;
-                } else if constexpr ((K0 & 7u) == 1) {
-                    volatile uint32_t _p = K2, _q = K3;
-                    _p = (_p * _q) ^ (_p >> 11); (void)_p;
-                } else if constexpr ((K0 & 7u) == 2) {
-                    volatile uint32_t _p = K1 ^ K3;
-                    for (volatile int _i = 0; _i < 3; ++_i) _p ^= _p << (_i + 1);
-                    (void)_p;
-                } else if constexpr ((K0 & 7u) == 3) {
-                    volatile uint32_t _p = K0 ^ K2, _q = K1 ^ K3;
-                    _p = (_p + _q) * 0x01000193u;
-                    _q = (_q ^ _p) * 0x27D4EB2Du;
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 4) {
-                    volatile uint32_t _p = K0, _q = K1;
-                    _p ^= _q >> 13; _q ^= _p << 7;
-                    _p += _q; _q *= _p; (void)_q;
-                } else if constexpr ((K0 & 7u) == 5) {
-                    volatile uint32_t _p = K2 ^ K3;
-                    volatile uint32_t _q = K1;
-                    _p = (_p >> 7) | (_p << 25);
-                    _q += _p * (_q | 1u);
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 6) {
-                    volatile uint64_t _p = K0;
-                    _p = _p * static_cast<uint64_t>(K1) + static_cast<uint64_t>(K2);
-                    _p ^= _p >> 33;
-                    volatile uint32_t _q = static_cast<uint32_t>(_p); (void)_q;
-                } else {
-                    volatile uint32_t _pa[4] = {K0, K1, K2, K3};
-                    _pa[0] ^= _pa[2]; _pa[1] += _pa[3];
-                    _pa[2] = _pa[0] * (_pa[1] | 1u);
-                    (void)_pa[3];
+            CW_NOINLINE void copy_to(Char* output) const {
+                std::array<uint8_t, N * sizeof(Char)> temporary{};
+                const volatile uint8_t* source = bytes.data();
+                for (size_t i = 0; i < bytes.size(); ++i) temporary[i] = source[i];
+                if constexpr (Layered)
+                    cipher::decrypt_buffer<K3 ^ 0x9E3779B9u, K2, K1, K0>(temporary.data(), temporary.size());
+                cipher::decrypt_buffer<K0, K1, K2, K3>(temporary.data(), temporary.size());
+                using U = std::make_unsigned_t<Char>;
+                for (size_t i = 0; i < N; ++i) {
+                    U value = 0;
+                    for (size_t j = 0; j < sizeof(Char); ++j)
+                        value |= static_cast<U>(temporary[i * sizeof(Char) + j]) << (j * 8);
+                    output[i] = std::bit_cast<Char>(value);
                 }
-                if (!decrypted.load(CW_MO_ACQUIRE)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (!decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<char, N>&>(data);
-#if CW_ENABLE_CONTROL_FLOW
-                        if constexpr ((K1 & 3u) == 0) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            } else {
-                                for (size_t _fi = 0; _fi < N; ++_fi)
-                                    mutable_data[_fi] ^= static_cast<char>(K2 >> ((_fi & 3u) * 8u));
-                            }
-                        } else if constexpr ((K1 & 3u) == 1) {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            }
-                        } else if constexpr ((K1 & 3u) == 2) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                if (control_flow::opaque_true<static_cast<int>((K1 >> 7) & 0x7F)>()) {
-                                    cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                                } else {
-                                    for (size_t _fi = N; _fi > 0; --_fi)
-                                        mutable_data[_fi-1] = static_cast<char>(
-                                            static_cast<uint8_t>(mutable_data[_fi-1]) ^ static_cast<uint8_t>(K3 >> ((_fi & 3u) * 8u)));
-                                }
-                            } else {
-                                volatile uint32_t _jk = K0;
-                                for (size_t _fi = 0; _fi < N; ++_fi) {
-                                    mutable_data[_fi] ^= static_cast<char>(_jk >> 24);
-                                    _jk = (_jk << 1) | (_jk >> 31);
-                                }
-                            }
-                        } else {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                volatile uint8_t _vb = static_cast<uint8_t>(mutable_data[0]);
-                                if (_vb != static_cast<uint8_t>(K3 & 0xFF))
-                                    cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            }
-                        }
-#else
-                        cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-#endif
-                        decrypted.store(true, CW_MO_RELEASE);
-                    }
-                }
-                if constexpr ((K2 & 7u) == 0) {
-                    volatile uint32_t _e = K3; _e *= 0x119DE1F3u; _e ^= _e >> 16; (void)_e;
-                } else if constexpr ((K2 & 7u) == 1) {
-                    volatile uint32_t _e = K0, _f = K1;
-                    _e ^= _f; _f += _e; _e = _f * (K2 | 1u); (void)_e;
-                } else if constexpr ((K2 & 7u) == 2) {
-                    volatile uint32_t _e = K2;
-                    _e = (_e << 7) ^ (_e >> 25);
-                    _e *= K3 | 1u;
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 3) {
-                    volatile uint64_t _e = K0;
-                    _e ^= static_cast<uint64_t>(K3) << 32;
-                    _e *= _e + 1u;
-                    volatile uint32_t _f = static_cast<uint32_t>(_e >> 16); (void)_f;
-                } else if constexpr ((K2 & 7u) == 4) {
-                    volatile uint32_t _e = K1, _f = K2, _g = K3;
-                    _e ^= _f >> 8; _f += _g; _g *= _e;
-                    _e = _f ^ _g; (void)_e;
-                } else if constexpr ((K2 & 7u) == 5) {
-                    volatile uint32_t _e = K0 ^ K3;
-                    for (volatile int _i = 0; _i < 2; ++_i) _e = (_e >> 11) | (_e << 21);
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 6) {
-                    volatile uint32_t _ea[3] = {K1, K2, K3};
-                    _ea[0] *= _ea[1] | 1u; _ea[2] ^= _ea[0];
-                    (void)_ea[2];
-                } else {
-                    volatile uint32_t _e = K3, _f = K0;
-                    _e ^= _f; _f = (_f << 5) | (_f >> 27);
-                    _e += _f * (_e | 1u); (void)_e;
-                }
-                CW_COMPILER_BARRIER();
-                return data.data();
-            }
-
-            CW_NOINLINE operator const char*() const { return get(); }
-
-            ~encrypted_string() {
-                if (decrypted.load(CW_MO_RELAXED)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<char, N>&>(data);
-                        cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                        decrypted.store(false, CW_MO_RELEASE);
-                    }
-                }
+                detail::wipe(temporary.data(), temporary.size());
             }
         };
 
-        template<size_t N>
-        encrypted_string(const char (&)[N]) -> encrypted_string<N>;
-
-        template<size_t N,
-                 uint32_t K0 = CW_RANDOM_CT(), uint32_t K1 = CW_RANDOM_CT(),
-                 uint32_t K2 = CW_RANDOM_CT(), uint32_t K3 = CW_RANDOM_CT()>
-        class layered_encrypted_string {
-        private:
-            std::array<char, N> data;
-            mutable CW_ATOMIC(bool) decrypted{false};
-            mutable CW_ATOMIC(uint32_t) access_count{0};
-            mutable CW_MUTEX mutex;
-            mutable uint32_t rk0{0}, rk1{0}, rk2{0}, rk3{0};
-            mutable bool has_rekeyed{false};
-
-            static constexpr std::array<char, N> encrypt_string(const char* str) {
-                std::array<char, N> result{};
-                for (size_t i = 0; i < N; ++i) result[i] = str[i];
-                cipher::encrypt_buffer<K0, K1, K2, K3>(result.data(), N);
-                return result;
-            }
-
-            // re-key: derive new runtime keys from entropy
-            CW_FORCEINLINE void rekey() const {
-                uint64_t entropy = CW_RANDOM_RT();
-                rk0 = K0 ^ static_cast<uint32_t>(entropy);
-                rk1 = K1 ^ static_cast<uint32_t>(entropy >> 32);
-                rk2 = K2 ^ static_cast<uint32_t>(entropy * (K0 | 1u));
-                rk3 = K3 ^ static_cast<uint32_t>((entropy >> 16) * (K1 | 1u));
-                has_rekeyed = true;
-            }
-
+        template<typename Char, size_t N, uint32_t K0, uint32_t K1,
+                 uint32_t K2, uint32_t K3, bool Layered = false>
+        class string_storage {
+            literal_payload<Char, N, K0, K1, K2, K3, Layered> payload;
+            mutable std::array<Char, N> plain{};
+            mutable std::atomic<bool> decrypted{false};
+            mutable std::mutex mutex;
         public:
+            constexpr string_storage(const Char (&text)[N]) : payload(text) {}
             template<size_t... I>
-            constexpr layered_encrypted_string(const char (&str)[N], std::index_sequence<I...>)
-                : data(encrypt_string(str)), decrypted(false) {}
-
-            constexpr layered_encrypted_string(const char (&str)[N])
-                : layered_encrypted_string(str, std::make_index_sequence<N>{}) {}
-
-            CW_NOINLINE const char* get() const {
-                CW_COMPILER_BARRIER();
-                if constexpr ((K0 & 7u) == 0) {
-                    volatile uint32_t _p = K1; _p ^= _p >> 16; (void)_p;
-                } else if constexpr ((K0 & 7u) == 1) {
-                    volatile uint32_t _p = K2, _q = K3;
-                    _p = (_p * _q) ^ (_p >> 11); (void)_p;
-                } else if constexpr ((K0 & 7u) == 2) {
-                    volatile uint32_t _p = K1 ^ K3;
-                    for (volatile int _i = 0; _i < 3; ++_i) _p ^= _p << (_i + 1);
-                    (void)_p;
-                } else if constexpr ((K0 & 7u) == 3) {
-                    volatile uint32_t _p = K0 ^ K2, _q = K1 ^ K3;
-                    _p = (_p + _q) * 0x01000193u;
-                    _q = (_q ^ _p) * 0x27D4EB2Du;
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 4) {
-                    volatile uint32_t _p = K0, _q = K1;
-                    _p ^= _q >> 13; _q ^= _p << 7;
-                    _p += _q; _q *= _p; (void)_q;
-                } else if constexpr ((K0 & 7u) == 5) {
-                    volatile uint32_t _p = K2 ^ K3;
-                    volatile uint32_t _q = K1;
-                    _p = (_p >> 7) | (_p << 25);
-                    _q += _p * (_q | 1u);
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 6) {
-                    volatile uint64_t _p = K0;
-                    _p = _p * static_cast<uint64_t>(K1) + static_cast<uint64_t>(K2);
-                    _p ^= _p >> 33;
-                    volatile uint32_t _q = static_cast<uint32_t>(_p); (void)_q;
-                } else {
-                    volatile uint32_t _pa[4] = {K0, K1, K2, K3};
-                    _pa[0] ^= _pa[2]; _pa[1] += _pa[3];
-                    _pa[2] = _pa[0] * (_pa[1] | 1u);
-                    (void)_pa[3];
-                }
-                if (!decrypted.load(CW_MO_ACQUIRE)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (!decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<char, N>&>(data);
-#if CW_ENABLE_CONTROL_FLOW
-                        if constexpr ((K1 & 3u) == 0) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            } else {
-                                for (size_t _fi = 0; _fi < N; ++_fi)
-                                    mutable_data[_fi] ^= static_cast<char>(K2 >> ((_fi & 3u) * 8u));
-                            }
-                        } else if constexpr ((K1 & 3u) == 1) {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            }
-                        } else if constexpr ((K1 & 3u) == 2) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                if (control_flow::opaque_true<static_cast<int>((K1 >> 7) & 0x7F)>()) {
-                                    cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                                } else {
-                                    for (size_t _fi = N; _fi > 0; --_fi)
-                                        mutable_data[_fi-1] = static_cast<char>(
-                                            static_cast<uint8_t>(mutable_data[_fi-1]) ^ static_cast<uint8_t>(K3 >> ((_fi & 3u) * 8u)));
-                                }
-                            } else {
-                                volatile uint32_t _jk = K0;
-                                for (size_t _fi = 0; _fi < N; ++_fi) {
-                                    mutable_data[_fi] ^= static_cast<char>(_jk >> 24);
-                                    _jk = (_jk << 1) | (_jk >> 31);
-                                }
-                            }
-                        } else {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                volatile uint8_t _vb = static_cast<uint8_t>(mutable_data[0]);
-                                if (_vb != static_cast<uint8_t>(K3 & 0xFF))
-                                    cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                            }
-                        }
-#else
-                        cipher::decrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-#endif
-                        decrypted.store(true, CW_MO_RELEASE);
+            constexpr string_storage(const Char (&text)[N], std::index_sequence<I...>) : payload(text) {}
+            CW_NOINLINE const Char* get() const {
+                if (!decrypted.load(std::memory_order_acquire)) {
+                    std::lock_guard<std::mutex> guard(mutex);
+                    if (!decrypted.load(std::memory_order_relaxed)) {
+                        payload.copy_to(plain.data());
+                        decrypted.store(true, std::memory_order_release);
                     }
                 }
-
-                // polymorphic re-encryption every 10 accesses
-                uint32_t count = access_count.fetch_add(1, CW_MO_RELAXED);
-                if (count > 0 && (count % 10) == 0 && decrypted.load(CW_MO_ACQUIRE)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<char, N>&>(data);
-                        rekey();
-                        //
-                        // The public API returns a raw pointer, so the buffer must
-                        // still be plaintext when get() returns. Churn it through
-                        // the new runtime key and immediately invert the stream so
-                        // the destructor later seals it with the fresh key.
-                        //
-                        cipher::rt_encrypt(mutable_data.data(), N, rk0, rk1, rk2, rk3);
-                        cipher::rt_encrypt(mutable_data.data(), N, rk0, rk1, rk2, rk3);
-                    }
-                }
-
-                if constexpr ((K2 & 7u) == 0) {
-                    volatile uint32_t _e = K3; _e *= 0x119DE1F3u; _e ^= _e >> 16; (void)_e;
-                } else if constexpr ((K2 & 7u) == 1) {
-                    volatile uint32_t _e = K0, _f = K1;
-                    _e ^= _f; _f += _e; _e = _f * (K2 | 1u); (void)_e;
-                } else if constexpr ((K2 & 7u) == 2) {
-                    volatile uint32_t _e = K2;
-                    _e = (_e << 7) ^ (_e >> 25);
-                    _e *= K3 | 1u;
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 3) {
-                    volatile uint64_t _e = K0;
-                    _e ^= static_cast<uint64_t>(K3) << 32;
-                    _e *= _e + 1u;
-                    volatile uint32_t _f = static_cast<uint32_t>(_e >> 16); (void)_f;
-                } else if constexpr ((K2 & 7u) == 4) {
-                    volatile uint32_t _e = K1, _f = K2, _g = K3;
-                    _e ^= _f >> 8; _f += _g; _g *= _e;
-                    _e = _f ^ _g; (void)_e;
-                } else if constexpr ((K2 & 7u) == 5) {
-                    volatile uint32_t _e = K0 ^ K3;
-                    for (volatile int _i = 0; _i < 2; ++_i) _e = (_e >> 11) | (_e << 21);
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 6) {
-                    volatile uint32_t _ea[3] = {K1, K2, K3};
-                    _ea[0] *= _ea[1] | 1u; _ea[2] ^= _ea[0];
-                    (void)_ea[2];
-                } else {
-                    volatile uint32_t _e = K3, _f = K0;
-                    _e ^= _f; _f = (_f << 5) | (_f >> 27);
-                    _e += _f * (_e | 1u); (void)_e;
-                }
-                CW_COMPILER_BARRIER();
-                return data.data();
+                return plain.data();
             }
-
-            CW_NOINLINE operator const char*() const { return get(); }
-
-            ~layered_encrypted_string() {
-                if (decrypted.load(CW_MO_RELAXED)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<char, N>&>(data);
-                        if (has_rekeyed)
-                            cipher::rt_encrypt(mutable_data.data(), N, rk0, rk1, rk2, rk3);
-                        else
-                            cipher::encrypt_buffer<K0, K1, K2, K3>(mutable_data.data(), N);
-                        decrypted.store(false, CW_MO_RELEASE);
-                    }
-                }
-            }
+            void copy_to(Char* output) const { payload.copy_to(output); }
+            operator const Char*() const { return get(); }
+            ~string_storage() { detail::wipe(plain.data(), sizeof(plain)); }
         };
 
-        template<size_t N>
-        layered_encrypted_string(const char (&)[N]) -> layered_encrypted_string<N>;
+        template<size_t N, uint32_t K0 = CW_DETAIL_RANDOM_CT(), uint32_t K1 = CW_DETAIL_RANDOM_CT() ^ 0xA341316Cu,
+                 uint32_t K2 = CW_DETAIL_RANDOM_CT() ^ 0xC8013EA4u, uint32_t K3 = CW_DETAIL_RANDOM_CT() ^ 0xAD90777Du>
+        class encrypted_string : public string_storage<char, N, K0, K1, K2, K3> {
+        public:
+            using string_storage<char, N, K0, K1, K2, K3>::string_storage;
+        };
+        template<size_t N> encrypted_string(const char (&)[N]) -> encrypted_string<N>;
+
+        template<size_t N, uint32_t K0 = CW_DETAIL_RANDOM_CT(), uint32_t K1 = CW_DETAIL_RANDOM_CT() ^ 0xA341316Cu,
+                 uint32_t K2 = CW_DETAIL_RANDOM_CT() ^ 0xC8013EA4u, uint32_t K3 = CW_DETAIL_RANDOM_CT() ^ 0xAD90777Du>
+        class layered_encrypted_string : public string_storage<char, N, K0, K1, K2, K3, true> {
+        public:
+            using string_storage<char, N, K0, K1, K2, K3, true>::string_storage;
+        };
+        template<size_t N> layered_encrypted_string(const char (&)[N]) -> layered_encrypted_string<N>;
+
+        template<size_t N, uint32_t K0 = CW_DETAIL_RANDOM_CT(), uint32_t K1 = CW_DETAIL_RANDOM_CT() ^ 0xA341316Cu,
+                 uint32_t K2 = CW_DETAIL_RANDOM_CT() ^ 0xC8013EA4u, uint32_t K3 = CW_DETAIL_RANDOM_CT() ^ 0xAD90777Du>
+        class encrypted_wstring : public string_storage<wchar_t, N, K0, K1, K2, K3> {
+        public:
+            using string_storage<wchar_t, N, K0, K1, K2, K3>::string_storage;
+        };
+        template<size_t N> encrypted_wstring(const wchar_t (&)[N]) -> encrypted_wstring<N>;
 
         template<size_t N>
         class stack_encrypted_string {
-        private:
-            char buffer[N];
-
+            std::array<char, N> buffer{};
         public:
+            template<uint32_t A, uint32_t B, uint32_t C, uint32_t D>
+            explicit stack_encrypted_string(const literal_payload<char, N, A, B, C, D>& payload) {
+                payload.copy_to(buffer.data());
+            }
             template<size_t M, uint32_t A, uint32_t B, uint32_t C, uint32_t D>
             stack_encrypted_string(const encrypted_string<M, A, B, C, D>& enc) {
-                const char* decrypted = enc.get();
-                for (size_t i = 0; i < N && i < M; ++i)
-                    buffer[i] = decrypted[i];
+                static_assert(N >= M, "The destination must fit the entire string");
+                enc.copy_to(buffer.data());
             }
-
-            const char* get() const { return buffer; }
-            operator const char*() const { return buffer; }
-
-            ~stack_encrypted_string() {
-                // secure wipe: volatile to prevent optimizer removal
-                volatile char* p = buffer;
-                for (size_t i = 0; i < N; ++i)
-                    p[i] = 0;
-                CW_COMPILER_BARRIER();
-            }
+            const char* get() const & { return buffer.data(); }
+            const char* get() const && = delete;
+            operator const char*() const & { return get(); }
+            operator const char*() const && = delete;
+            ~stack_encrypted_string() { detail::wipe(buffer.data(), N); }
         };
 
-        template<size_t N,
-                 uint32_t K0 = CW_RANDOM_CT(), uint32_t K1 = CW_RANDOM_CT(),
-                 uint32_t K2 = CW_RANDOM_CT(), uint32_t K3 = CW_RANDOM_CT()>
-        class encrypted_wstring {
-        private:
-            static constexpr size_t BYTE_LEN = N * sizeof(wchar_t);
-            std::array<wchar_t, N> data;
-            mutable CW_ATOMIC(bool) decrypted{false};
-            mutable CW_MUTEX mutex;
-
-
-
-            // constexpr-safe wchar_t encryption: serialize to bytes, encrypt, deserialize
-            static constexpr std::array<wchar_t, N> encrypt_wstring(const wchar_t* str) {
-                std::array<uint8_t, BYTE_LEN> bytes{};
-                for (size_t i = 0; i < N; ++i) {
-                    bytes[i * 2]     = static_cast<uint8_t>(str[i] & 0xFF);
-                    bytes[i * 2 + 1] = static_cast<uint8_t>((str[i] >> 8) & 0xFF);
-                }
-                cipher::encrypt_buffer<K0, K1, K2, K3>(bytes.data(), BYTE_LEN);
-                std::array<wchar_t, N> result{};
-                for (size_t i = 0; i < N; ++i) {
-                    result[i] = static_cast<wchar_t>(bytes[i * 2])
-                              | (static_cast<wchar_t>(bytes[i * 2 + 1]) << 8);
-                }
-                return result;
-            }
-
-        public:
-            template<size_t... I>
-            constexpr encrypted_wstring(const wchar_t (&str)[N], std::index_sequence<I...>)
-                : data(encrypt_wstring(str)), decrypted(false) {}
-
-            constexpr encrypted_wstring(const wchar_t (&str)[N])
-                : encrypted_wstring(str, std::make_index_sequence<N>{}) {}
-
-            CW_NOINLINE const wchar_t* get() const {
-                CW_COMPILER_BARRIER();
-                if constexpr ((K0 & 7u) == 0) {
-                    volatile uint32_t _p = K1; _p ^= _p >> 16; (void)_p;
-                } else if constexpr ((K0 & 7u) == 1) {
-                    volatile uint32_t _p = K2, _q = K3;
-                    _p = (_p * _q) ^ (_p >> 11); (void)_p;
-                } else if constexpr ((K0 & 7u) == 2) {
-                    volatile uint32_t _p = K1 ^ K3;
-                    for (volatile int _i = 0; _i < 3; ++_i) _p ^= _p << (_i + 1);
-                    (void)_p;
-                } else if constexpr ((K0 & 7u) == 3) {
-                    volatile uint32_t _p = K0 ^ K2, _q = K1 ^ K3;
-                    _p = (_p + _q) * 0x01000193u;
-                    _q = (_q ^ _p) * 0x27D4EB2Du;
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 4) {
-                    volatile uint32_t _p = K0, _q = K1;
-                    _p ^= _q >> 13; _q ^= _p << 7;
-                    _p += _q; _q *= _p; (void)_q;
-                } else if constexpr ((K0 & 7u) == 5) {
-                    volatile uint32_t _p = K2 ^ K3;
-                    volatile uint32_t _q = K1;
-                    _p = (_p >> 7) | (_p << 25);
-                    _q += _p * (_q | 1u);
-                    volatile uint32_t _r = _p ^ _q; (void)_r;
-                } else if constexpr ((K0 & 7u) == 6) {
-                    volatile uint64_t _p = K0;
-                    _p = _p * static_cast<uint64_t>(K1) + static_cast<uint64_t>(K2);
-                    _p ^= _p >> 33;
-                    volatile uint32_t _q = static_cast<uint32_t>(_p); (void)_q;
-                } else {
-                    volatile uint32_t _pa[4] = {K0, K1, K2, K3};
-                    _pa[0] ^= _pa[2]; _pa[1] += _pa[3];
-                    _pa[2] = _pa[0] * (_pa[1] | 1u);
-                    (void)_pa[3];
-                }
-                if (!decrypted.load(CW_MO_ACQUIRE)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (!decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<wchar_t, N>&>(data);
-                        uint8_t bytes[BYTE_LEN];
-                        for (size_t i = 0; i < N; ++i) {
-                            bytes[i * 2]     = static_cast<uint8_t>(mutable_data[i] & 0xFF);
-                            bytes[i * 2 + 1] = static_cast<uint8_t>((mutable_data[i] >> 8) & 0xFF);
-                        }
-#if CW_ENABLE_CONTROL_FLOW
-                        if constexpr ((K1 & 3u) == 0) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::decrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                            } else {
-                                for (size_t _fi = 0; _fi < BYTE_LEN; ++_fi)
-                                    bytes[_fi] ^= static_cast<uint8_t>(K2 >> ((_fi & 3u) * 8u));
-                            }
-                        } else if constexpr ((K1 & 3u) == 1) {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                cipher::encrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                            }
-                        } else if constexpr ((K1 & 3u) == 2) {
-                            if (control_flow::opaque_true<static_cast<int>(K1 & 0x7F)>()) {
-                                if (control_flow::opaque_true<static_cast<int>((K1 >> 7) & 0x7F)>()) {
-                                    cipher::decrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                                } else {
-                                    for (size_t _fi = BYTE_LEN; _fi > 0; --_fi)
-                                        bytes[_fi-1] ^= static_cast<uint8_t>(K3 >> ((_fi & 3u) * 8u));
-                                }
-                            } else {
-                                volatile uint32_t _jk = K0;
-                                for (size_t _fi = 0; _fi < BYTE_LEN; ++_fi) {
-                                    bytes[_fi] ^= static_cast<uint8_t>(_jk >> 24);
-                                    _jk = (_jk << 1) | (_jk >> 31);
-                                }
-                            }
-                        } else {
-                            cipher::decrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                            if (control_flow::opaque_false<static_cast<int>(K1 & 0x7F)>()) {
-                                volatile uint8_t _vb = bytes[0];
-                                if (_vb != static_cast<uint8_t>(K3 & 0xFF))
-                                    cipher::encrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                            }
-                        }
-#else
-                        cipher::decrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-#endif
-                        for (size_t i = 0; i < N; ++i) {
-                            mutable_data[i] = static_cast<wchar_t>(bytes[i * 2])
-                                            | (static_cast<wchar_t>(bytes[i * 2 + 1]) << 8);
-                        }
-                        decrypted.store(true, CW_MO_RELEASE);
-                    }
-                }
-                if constexpr ((K2 & 7u) == 0) {
-                    volatile uint32_t _e = K3; _e *= 0x119DE1F3u; _e ^= _e >> 16; (void)_e;
-                } else if constexpr ((K2 & 7u) == 1) {
-                    volatile uint32_t _e = K0, _f = K1;
-                    _e ^= _f; _f += _e; _e = _f * (K2 | 1u); (void)_e;
-                } else if constexpr ((K2 & 7u) == 2) {
-                    volatile uint32_t _e = K2;
-                    _e = (_e << 7) ^ (_e >> 25);
-                    _e *= K3 | 1u;
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 3) {
-                    volatile uint64_t _e = K0;
-                    _e ^= static_cast<uint64_t>(K3) << 32;
-                    _e *= _e + 1u;
-                    volatile uint32_t _f = static_cast<uint32_t>(_e >> 16); (void)_f;
-                } else if constexpr ((K2 & 7u) == 4) {
-                    volatile uint32_t _e = K1, _f = K2, _g = K3;
-                    _e ^= _f >> 8; _f += _g; _g *= _e;
-                    _e = _f ^ _g; (void)_e;
-                } else if constexpr ((K2 & 7u) == 5) {
-                    volatile uint32_t _e = K0 ^ K3;
-                    for (volatile int _i = 0; _i < 2; ++_i) _e = (_e >> 11) | (_e << 21);
-                    (void)_e;
-                } else if constexpr ((K2 & 7u) == 6) {
-                    volatile uint32_t _ea[3] = {K1, K2, K3};
-                    _ea[0] *= _ea[1] | 1u; _ea[2] ^= _ea[0];
-                    (void)_ea[2];
-                } else {
-                    volatile uint32_t _e = K3, _f = K0;
-                    _e ^= _f; _f = (_f << 5) | (_f >> 27);
-                    _e += _f * (_e | 1u); (void)_e;
-                }
-                CW_COMPILER_BARRIER();
-                return data.data();
-            }
-
-            CW_NOINLINE operator const wchar_t*() const { return get(); }
-
-            ~encrypted_wstring() {
-                if (decrypted.load(CW_MO_RELAXED)) {
-                    CW_LOCK_GUARD(mutex);
-                    if (decrypted.load(CW_MO_RELAXED)) {
-                        auto& mutable_data = const_cast<std::array<wchar_t, N>&>(data);
-                        uint8_t bytes[BYTE_LEN];
-                        for (size_t i = 0; i < N; ++i) {
-                            bytes[i * 2]     = static_cast<uint8_t>(mutable_data[i] & 0xFF);
-                            bytes[i * 2 + 1] = static_cast<uint8_t>((mutable_data[i] >> 8) & 0xFF);
-                        }
-                        cipher::encrypt_buffer<K0, K1, K2, K3>(bytes, BYTE_LEN);
-                        for (size_t i = 0; i < N; ++i) {
-                            mutable_data[i] = static_cast<wchar_t>(bytes[i * 2])
-                                            | (static_cast<wchar_t>(bytes[i * 2 + 1]) << 8);
-                        }
-                        decrypted.store(false, CW_MO_RELEASE);
-                    }
-                }
-            }
-        };
-
-        template<size_t N>
-        encrypted_wstring(const wchar_t (&)[N]) -> encrypted_wstring<N>;
-    }
-
-    //
-    // per-site size padding injected into CW_STR wrapper lambdas.
-    // the Pad template parameter is CW_RANDOM_CT(), unique per macro expansion,
-    // so each wrapper lambda gets a different code shape via if-constexpr.
-    //
-    namespace string_encrypt {
-        template<uint32_t Pad>
-        CW_FORCEINLINE void size_pad() {
-            if constexpr ((Pad & 0xFu) == 0) {
-                volatile uint32_t _p = Pad; _p ^= _p >> 16; (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 1) {
-                volatile uint32_t _p = Pad, _q = Pad >> 16;
-                _p *= _q | 1u; (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 2) {
-                volatile uint32_t _p = Pad;
-                for (volatile int _i = 0; _i < 2; ++_i) _p ^= _p << 3;
-                (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 3) {
-                volatile uint32_t _p = Pad, _q = Pad >> 8, _r = Pad >> 16;
-                _p ^= _q; _q += _r; _r *= _p; (void)_r;
-            } else if constexpr ((Pad & 0xFu) == 4) {
-                volatile uint32_t _p = Pad;
-                _p = (_p * 0x45D9F3Bu) ^ (_p >> 11);
-                _p += _p >> 7;
-                (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 5) {
-                volatile uint32_t _p = Pad, _q = Pad >> 16;
-                _p ^= _q; _q = (_q << 3) | (_q >> 29);
-                volatile uint32_t _r = _p * (_q | 1u); (void)_r;
-            } else if constexpr ((Pad & 0xFu) == 6) {
-                volatile uint64_t _p = Pad;
-                _p *= _p + 0x45D9F3Bu;
-                _p ^= _p >> 33;
-                volatile uint32_t _q = static_cast<uint32_t>(_p); (void)_q;
-            } else if constexpr ((Pad & 0xFu) == 7) {
-                volatile uint32_t _pa[4] = {Pad, Pad >> 8, Pad >> 16, Pad >> 24};
-                for (volatile int _i = 0; _i < 3; ++_i)
-                    _pa[_i] ^= _pa[_i + 1];
-                (void)_pa[0];
-            } else if constexpr ((Pad & 0xFu) == 8) {
-                volatile uint32_t _p = Pad;
-                if (_p & 1u) _p ^= _p << 5;
-                else _p += _p >> 3;
-                _p *= (_p | 1u); (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 9) {
-                volatile uint32_t _p = Pad, _q = Pad >> 11;
-                volatile uint32_t _r = _p ^ _q;
-                _r = (_r * 0x27D4EB2Du) ^ (_r >> 15);
-                _p = _r + _q; (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 10) {
-                volatile uint32_t _p = Pad;
-                for (volatile int _i = 0; _i < static_cast<int>((Pad >> 28) & 3u) + 2; ++_i)
-                    _p = (_p >> 7) | (_p << 25);
-                (void)_p;
-            } else if constexpr ((Pad & 0xFu) == 11) {
-                volatile uint64_t _p = static_cast<uint64_t>(Pad) << 32 | Pad;
-                volatile uint64_t _q = _p ^ (_p >> 17);
-                _q *= _q + 1u;
-                volatile uint32_t _r = static_cast<uint32_t>(_q >> 32); (void)_r;
-            } else if constexpr ((Pad & 0xFu) == 12) {
-                volatile uint32_t _p = Pad, _q = Pad >> 4, _r = Pad >> 12;
-                _p = (_p + _q) ^ _r;
-                _q = _p * (_r | 1u);
-                _r = _q ^ (_p >> 8);
-                volatile uint32_t _s = _p ^ _q ^ _r; (void)_s;
-            } else if constexpr ((Pad & 0xFu) == 13) {
-                volatile uint32_t _pa[3] = {Pad, ~Pad, Pad >> 16};
-                _pa[0] *= _pa[2] | 1u;
-                _pa[1] ^= _pa[0];
-                _pa[2] = (_pa[0] + _pa[1]) ^ _pa[2];
-                (void)_pa[2];
-            } else if constexpr ((Pad & 0xFu) == 14) {
-                volatile uint32_t _p = Pad;
-                volatile uint32_t _q = _p;
-                _p = (_p << 13) ^ (_p >> 19);
-                _q += _p;
-                _p ^= _q;
-                _q = _p * (_q | 1u);
-                (void)_q;
-            } else {
-                volatile uint64_t _p = Pad;
-                volatile uint32_t _q = Pad >> 16;
-                _p = (_p * 0x119DE1F3u) ^ (_p >> 7);
-                _q ^= static_cast<uint32_t>(_p);
-                _p += _q;
-                volatile uint32_t _r = static_cast<uint32_t>(_p ^ (_p >> 32)); (void)_r;
-            }
-            CW_COMPILER_BARRIER();
-        }
+        // Kept for source compatibility with callers using this internal helper.
+        template<uint32_t Pad> inline void size_pad() { CW_COMPILER_BARRIER(); }
     }
 
     // string encryption macros
-    // constinit ensures compile-time initialization (encrypted data in .rdata, not plaintext)
+    // constinit requires encrypted initialization; the plaintext cache is populated on first access.
 #define CW_STR(s) \
     static_cast<const char*>(([]() CW_NOINLINE -> const char* { \
         constinit static cloakwork::string_encrypt::encrypted_string<sizeof(s), \
@@ -3372,9 +2570,8 @@ namespace cloakwork {
 
 #define CW_STR_STACK(s) \
     ([&]() CW_NOINLINE { \
-        constinit static cloakwork::string_encrypt::encrypted_string<sizeof(s), \
+        static constexpr cloakwork::string_encrypt::literal_payload<char, sizeof(s), \
             CW_RANDOM_CT(), CW_RANDOM_CT(), CW_RANDOM_CT(), CW_RANDOM_CT()> enc(s); \
-        cloakwork::string_encrypt::size_pad<CW_RANDOM_CT()>(); \
         return cloakwork::string_encrypt::stack_encrypted_string<sizeof(s)>(enc); \
     }())
 
@@ -3386,7 +2583,7 @@ namespace cloakwork {
         return enc.get(); \
     }()))
 
-// stack string builder - builds string char-by-char, never exists as literal in binary
+// Stack string builder. Compilers may combine the initializers into a string literal.
 // usage: CW_STACK_STR(name, 'h','e','l','l','o','\0')
 #define CW_STACK_STR(name, ...) \
     char name[] = { __VA_ARGS__ }; \
@@ -3408,268 +2605,81 @@ namespace cloakwork {
     #define CW_STACK_STR(name, ...) char name[] = { __VA_ARGS__ }
 #endif
 
-#if CW_ENABLE_VALUE_OBFUSCATION
-
-#if CW_KERNEL_MODE
+#if !CW_KERNEL_MODE
     namespace detail {
-        template<typename T>
-        struct is_integral_type : std::is_integral<T> {};
 
-        template<typename T>
-        struct is_arithmetic_type : std::is_arithmetic<T> {};
-    }
 
-    namespace mba {
-
-        // deep MBA add variant 0: nested De Morgan with carry propagation
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_NOINLINE T add_deep(T x, T y) {
-            CW_COMPILER_BARRIER();
-            volatile T vx = x, vy = y;
-            CW_COMPILER_BARRIER();
-            volatile T t0 = ~(~vx & ~vy);
-            volatile T t1 = ~(~vx | ~vy);
-            CW_COMPILER_BARRIER();
-            T a = t0, b = t1;
-            volatile T half = a ^ b;
-            volatile T carry = (a & b) << 1;
-            CW_COMPILER_BARRIER();
-            T h = half, c = carry;
-            volatile T result = (h ^ c) + (static_cast<T>(h & c) << 1);
-            CW_COMPILER_BARRIER();
-            return static_cast<T>(result);
+        // Four Feistel rounds on byte halves. This is reversible obfuscation,
+        // not a cryptographic cipher. All intermediates have defined unsigned semantics.
+        constexpr uint8_t byte_round(uint8_t right, uint8_t key, unsigned round) {
+            return static_cast<uint8_t>((right * right + right * (key | 1u) +
+                (key >> (round & 3u))) ^ (right << 1u)) & 15u;
         }
 
-        // deep MBA add variant 1: XOR via De Morgan expansion
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_NOINLINE T add_deep_alt(T x, T y) {
-            CW_COMPILER_BARRIER();
-            volatile T vx = x, vy = y;
-            CW_COMPILER_BARRIER();
-            T a = ~static_cast<T>(vx) & static_cast<T>(vy);
-            T b = static_cast<T>(vx) & ~static_cast<T>(vy);
-            volatile T c = a | b;
-            volatile T d = ~(~vx | ~vy);
-            CW_COMPILER_BARRIER();
-            T cv = c, dv = d;
-            volatile T e = dv + dv;
-            CW_COMPILER_BARRIER();
-            T ev = e;
-            volatile T result = (cv ^ ev) + (static_cast<T>(cv & ev) << 1);
-            CW_COMPILER_BARRIER();
-            return static_cast<T>(result);
-        }
-
-        template<typename T, int Variant = 0, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE T add_mba(T x, T y) {
-            if constexpr (Variant % 2 == 0) {
-                return add_deep(x, y);
-            } else {
-                return add_deep_alt(x, y);
+        constexpr uint8_t encode_byte(uint8_t value, uint8_t key) {
+            unsigned left = value >> 4u, right = value & 15u;
+            for (unsigned round = 0; round < 4; ++round) {
+                unsigned next = left ^ byte_round(static_cast<uint8_t>(right), key, round);
+                left = right;
+                right = next;
             }
+            return static_cast<uint8_t>((left << 4u) | right);
         }
 
-        // deep subtraction: x - y = x + (~y + 1)
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_NOINLINE T sub_deep(T x, T y) {
-            CW_COMPILER_BARRIER();
-            volatile T vy = y;
-            CW_COMPILER_BARRIER();
-            T neg_y = ~static_cast<T>(vy);
-            T one = static_cast<T>(1);
-            volatile T t0 = ~(~neg_y & ~one);
-            volatile T t1 = ~(~neg_y | ~one);
-            CW_COMPILER_BARRIER();
-            T a0 = t0, a1 = t1;
-            volatile T neg_result = (a0 ^ a1) + (static_cast<T>(a0 & a1) << 1);
-            CW_COMPILER_BARRIER();
-            volatile T vx = x;
-            CW_COMPILER_BARRIER();
-            T xv = vx, nr = neg_result;
-            T da = ~xv & nr;
-            T db = xv & ~nr;
-            volatile T dc = da | db;
-            volatile T dd = ~(~xv | ~nr);
-            CW_COMPILER_BARRIER();
-            T cv = dc;
-            volatile T result = cv + (static_cast<T>(dd) << 1);
-            CW_COMPILER_BARRIER();
-            return static_cast<T>(result);
+        constexpr uint8_t decode_byte(uint8_t value, uint8_t key) {
+            unsigned left = value >> 4u, right = value & 15u;
+            for (unsigned round = 4; round-- > 0;) {
+                unsigned previous = right ^ byte_round(static_cast<uint8_t>(left), key, round);
+                right = left;
+                left = previous;
+            }
+            return static_cast<uint8_t>((left << 4u) | right);
         }
 
-        template<typename T, int Variant = 0, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE T sub_mba(T x, T y) {
-            return sub_deep(x, y);
-        }
+        template<Arithmetic T>
+        class encoded_storage {
+            std::array<uint8_t, sizeof(T)> bytes{};
+            std::array<uint8_t, sizeof(T)> keys{};
+        public:
+            encoded_storage() { set(T{}); }
+            explicit encoded_storage(T value) { set(value); }
+            ~encoded_storage() { wipe(bytes.data(), bytes.size()); wipe(keys.data(), keys.size()); }
 
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE T mul2_mba(T x) {
-            return add_mba(x, x);
-        }
-
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE T neg_mba(T x) {
-            return add_mba(static_cast<T>(~x), static_cast<T>(1));
-        }
-
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE constexpr T and_mba(T x, T y) {
-            return ~(~x | ~y);
-        }
-
-        template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-        CW_FORCEINLINE constexpr T or_mba(T x, T y) {
-            return ~(~x & ~y);
-        }
-    }
-
-    template<typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
-    class obfuscated_value {
-    private:
-        mutable T value{};
-        T xor_key{};
-        T add_key{};
-        mutable CW_ATOMIC(uint32_t) access_count{0};
-
-        // rotate bits for additional obfuscation
-        template<typename U = T, typename = std::enable_if_t<std::is_integral_v<U>>>
-        static constexpr U rotate_left(U val, int shift) {
-            constexpr int bits = sizeof(U) * 8;
-            shift %= bits;
-            if (shift == 0) return val;
-            return (val << shift) | (val >> (bits - shift));
-        }
-
-        template<typename U = T, typename = std::enable_if_t<std::is_integral_v<U>>>
-        static constexpr U rotate_right(U val, int shift) {
-            constexpr int bits = sizeof(U) * 8;
-            shift %= bits;
-            if (shift == 0) return val;
-            return (val >> shift) | (val << (bits - shift));
-        }
-
-    public:
-        obfuscated_value() {
-            xor_key = static_cast<T>(CW_RANDOM_RT());
-            add_key = static_cast<T>(CW_RANDOM_RT());
-            set(static_cast<T>(0));
-        }
-
-        obfuscated_value(T val) {
-            xor_key = static_cast<T>(CW_RANDOM_RT());
-            add_key = static_cast<T>(CW_RANDOM_RT());
-            set(val);
-        }
-
-        CW_NOINLINE void set(T val) {
-            CW_COMPILER_BARRIER();
-            if constexpr(std::is_integral_v<T>) {
-                T temp = mba::add_mba(val, add_key);
-                temp ^= xor_key;
-                value = mba::add_mba(temp, static_cast<T>(xor_key & 0xFF));
-            } else {
-                // floating point: byte-level xor via memcpy to avoid NaN UB
-                uint8_t val_bytes[sizeof(T)];
-                uint8_t key_bytes[sizeof(T)];
-                memcpy(val_bytes, &val, sizeof(T));
-                memcpy(key_bytes, &xor_key, sizeof(T));
+            CW_NOINLINE void set(T value) {
+                auto plain = std::bit_cast<std::array<uint8_t, sizeof(T)>>(value);
+                for (size_t i = 0; i < sizeof(T); ++i) {
+                    keys[i] = static_cast<uint8_t>(CW_RANDOM_RT());
+                    bytes[i] = encode_byte(plain[i], keys[i]);
+                }
+                wipe(plain.data(), plain.size());
+            }
+            CW_NOINLINE T get() const {
+                std::array<uint8_t, sizeof(T)> plain{};
                 for (size_t i = 0; i < sizeof(T); ++i)
-                    val_bytes[i] ^= key_bytes[i];
-                memcpy(&value, val_bytes, sizeof(T));
-            }
-            CW_COMPILER_BARRIER();
-        }
-
-        CW_NOINLINE T get() const {
-            CW_COMPILER_BARRIER();
-            if ((++access_count % 1000) == 0) {
-                cloakwork::anti_debug::inline_check();
-            }
-
-            if constexpr(std::is_integral_v<T>) {
-                T temp = mba::sub_mba(value, static_cast<T>(xor_key & 0xFF));
-                temp ^= xor_key;
-                T out = mba::sub_mba(temp, add_key);
-                CW_COMPILER_BARRIER();
-                return out;
-            } else {
-                uint8_t val_bytes[sizeof(T)];
-                uint8_t key_bytes[sizeof(T)];
-                memcpy(val_bytes, &value, sizeof(T));
-                memcpy(key_bytes, &xor_key, sizeof(T));
-                for (size_t i = 0; i < sizeof(T); ++i)
-                    val_bytes[i] ^= key_bytes[i];
-                T result;
-                memcpy(&result, val_bytes, sizeof(T));
-                CW_COMPILER_BARRIER();
+                    plain[i] = decode_byte(bytes[i], keys[i]);
+                T result = std::bit_cast<T>(plain);
+                wipe(plain.data(), plain.size());
                 return result;
             }
-        }
+        };
+    }
+#endif
 
-        CW_FORCEINLINE operator T() const { return get(); }
-        CW_FORCEINLINE obfuscated_value& operator=(T val) { set(val); return *this; }
-    };
-
-    template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
-    class mba_obfuscated {
-    private:
-        T encoded{};
-        T key1{};
-        T key2{};
-
-    public:
-        mba_obfuscated() {
-            key1 = static_cast<T>(CW_RANDOM_RT());
-            key2 = static_cast<T>(CW_RANDOM_RT());
-            set(static_cast<T>(0));
-        }
-
-        mba_obfuscated(T val) {
-            key1 = static_cast<T>(CW_RANDOM_RT());
-            key2 = static_cast<T>(CW_RANDOM_RT());
-            set(val);
-        }
-
-        CW_NOINLINE void set(T val) {
-            CW_COMPILER_BARRIER();
-            T temp = mba::add_mba(val, key1);
-            encoded = temp ^ key2;
-            CW_COMPILER_BARRIER();
-        }
-
-        CW_NOINLINE T get() const {
-            CW_COMPILER_BARRIER();
-            T temp = encoded ^ key2;
-            T out = mba::sub_mba(temp, key1);
-            CW_COMPILER_BARRIER();
-            return out;
-        }
-
-        CW_FORCEINLINE operator T() const { return get(); }
-        CW_FORCEINLINE mba_obfuscated& operator=(T val) { set(val); return *this; }
-    };
-
-#else
-
-    template<typename T>
-    concept Integral = std::is_integral_v<T>;
-
-    template<typename T>
-    concept Arithmetic = std::is_arithmetic_v<T>;
+#if CW_ENABLE_VALUE_OBFUSCATION
 
     namespace mba {
 
         /*++
-        
+
         MBA transforms.
-        
+
         --*/
 
         template<Integral T>
         using clean_integral_t = std::remove_cv_t<T>;
 
         template<Integral T>
-        using unsigned_integral_t = std::make_unsigned_t<clean_integral_t<T>>;
+        using unsigned_integral_t = std::make_unsigned_t<std::conditional_t<std::is_same_v<clean_integral_t<T>, bool>, uint8_t, clean_integral_t<T>>>;
 
         template<Integral T>
         CW_FORCEINLINE clean_integral_t<T> from_unsigned(unsigned_integral_t<T> value) {
@@ -3689,7 +2699,7 @@ namespace cloakwork {
         template<Integral T>
         CW_NOINLINE clean_integral_t<T> add_deep(T x, T y) {
             CW_COMPILER_BARRIER();
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             volatile U vx = static_cast<U>(x), vy = static_cast<U>(y);
             CW_COMPILER_BARRIER();
             // depth 1: (x|y) and (x&y) via De Morgan
@@ -3716,7 +2726,7 @@ namespace cloakwork {
         template<Integral T>
         CW_NOINLINE clean_integral_t<T> add_deep_alt(T x, T y) {
             CW_COMPILER_BARRIER();
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             volatile U vx = static_cast<U>(x), vy = static_cast<U>(y);
             CW_COMPILER_BARRIER();
             U a = ~static_cast<U>(vx) & static_cast<U>(vy);
@@ -3734,14 +2744,24 @@ namespace cloakwork {
             return from_unsigned<T>(result);
         }
 
+        // Product terms couple both operands. The cancellation remains algebraically
+        // simplifiable; volatile materialization only constrains compiler optimization.
+        template<Integral T, int Variant = 2>
+        CW_NOINLINE clean_integral_t<T> add_nonlinear(T x, T y) {
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
+            const U a = static_cast<U>(x), b = static_cast<U>(y);
+            volatile U product = (a ^ static_cast<U>(Variant)) * (b | U{1});
+            volatile U mixed = (a ^ b) + ((a & b) << 1) + product;
+            CW_COMPILER_BARRIER();
+            return from_unsigned<T>(static_cast<unsigned_integral_t<T>>(mixed - product));
+        }
+
         // compile-time variant selection gives each call site a different expansion
         template<Integral T, int Variant = 0>
         CW_FORCEINLINE clean_integral_t<T> add_mba(T x, T y) {
-            if constexpr (Variant % 2 == 0) {
-                return add_deep(x, y);
-            } else {
-                return add_deep_alt(x, y);
-            }
+            if constexpr ((Variant & 3) == 0) return add_deep(x, y);
+            else if constexpr ((Variant & 3) == 1) return add_deep_alt(x, y);
+            else return add_nonlinear<T, Variant>(x, y);
         }
 
         //
@@ -3751,7 +2771,7 @@ namespace cloakwork {
         template<Integral T>
         CW_NOINLINE clean_integral_t<T> sub_deep(T x, T y) {
             CW_COMPILER_BARRIER();
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             volatile U vy = static_cast<U>(y);
             CW_COMPILER_BARRIER();
             U neg_y = ~static_cast<U>(vy);
@@ -3780,7 +2800,11 @@ namespace cloakwork {
 
         template<Integral T, int Variant = 0>
         CW_FORCEINLINE clean_integral_t<T> sub_mba(T x, T y) {
-            return sub_deep(x, y);
+            if constexpr ((Variant & 1) == 0) return sub_deep(x, y);
+            else {
+                using U = unsigned_integral_t<T>;
+                return add_mba<clean_integral_t<T>, Variant>(x, from_unsigned<T>(static_cast<U>(U{0} - static_cast<U>(y))));
+            }
         }
 
         // x * 2 routed through deep add
@@ -3792,7 +2816,7 @@ namespace cloakwork {
         // negation via deep MBA: -x = ~x + 1
         template<Integral T>
         CW_FORCEINLINE clean_integral_t<T> neg_mba(T x) {
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             U ux = static_cast<U>(x);
             return from_unsigned<T>(add_mba(static_cast<clean_integral_t<T>>(~ux), static_cast<clean_integral_t<T>>(1)));
         }
@@ -3801,16 +2825,27 @@ namespace cloakwork {
         // recognizable than arithmetic MBA and simplifiers don't target them
         template<Integral T>
         CW_FORCEINLINE constexpr clean_integral_t<T> and_mba(T x, T y) {
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             U result = ~(~static_cast<U>(x) | ~static_cast<U>(y));
-            return std::bit_cast<clean_integral_t<T>>(result);
+            return from_unsigned<T>(static_cast<unsigned_integral_t<T>>(result));
         }
 
         template<Integral T>
         CW_FORCEINLINE constexpr clean_integral_t<T> or_mba(T x, T y) {
-            using U = unsigned_integral_t<T>;
+            using U = std::conditional_t<(sizeof(T) < sizeof(unsigned)), unsigned, unsigned_integral_t<T>>;
             U result = ~(~static_cast<U>(x) & ~static_cast<U>(y));
-            return std::bit_cast<clean_integral_t<T>>(result);
+            return from_unsigned<T>(static_cast<unsigned_integral_t<T>>(result));
+        }
+
+        template<Integral A, Integral B>
+        CW_FORCEINLINE auto and_mba_once(A a, B b) {
+            using R = decltype(a & b);
+            return and_mba<R>(static_cast<R>(a), static_cast<R>(b));
+        }
+        template<Integral A, Integral B>
+        CW_FORCEINLINE auto or_mba_once(A a, B b) {
+            using R = decltype(a | b);
+            return or_mba<R>(static_cast<R>(a), static_cast<R>(b));
         }
 
         template<Integral A, Integral B>
@@ -3824,139 +2859,54 @@ namespace cloakwork {
 
     template<Arithmetic T>
     class obfuscated_value {
-    private:
-        mutable T value{};
-        T xor_key{};
-        T add_key{};
-        mutable CW_ATOMIC(uint32_t) access_count{0};
-
-        // rotate bits for additional obfuscation
-        template<Integral U = T>
-        static constexpr U rotate_left(U val, int shift) {
-            constexpr int bits = sizeof(U) * 8;
-            shift %= bits;
-            if (shift == 0) return val;
-            return (val << shift) | (val >> (bits - shift));
-        }
-
-        template<Integral U = T>
-        static constexpr U rotate_right(U val, int shift) {
-            constexpr int bits = sizeof(U) * 8;
-            shift %= bits;
-            if (shift == 0) return val;
-            return (val >> shift) | (val << (bits - shift));
-        }
-
+        detail::encoded_storage<T> storage;
+        mutable CW_MUTEX mutex;
     public:
-        obfuscated_value() {
-            xor_key = static_cast<T>(CW_RANDOM_RT());
-            add_key = static_cast<T>(CW_RANDOM_RT());
-            set(static_cast<T>(0));
+        obfuscated_value() = default;
+        obfuscated_value(T value) : storage(value) {}
+        obfuscated_value(const obfuscated_value& other) : storage(other.get()) {}
+        obfuscated_value& operator=(const obfuscated_value& other) {
+            if (this != &other) set(other.get());
+            return *this;
         }
-
-        obfuscated_value(T val) {
-            xor_key = static_cast<T>(CW_RANDOM_RT());
-            add_key = static_cast<T>(CW_RANDOM_RT());
-            set(val);
-        }
-
-        CW_NOINLINE void set(T val) {
-            CW_COMPILER_BARRIER();
-            if constexpr(Integral<T>) {
-                // multi-step obfuscation: mba then xor then mba again for deeper chain
-                T temp = mba::add_mba(val, add_key);
-                temp ^= xor_key;
-                value = mba::add_mba(temp, static_cast<T>(xor_key & 0xFF));
-            } else {
-                // floating point: byte-level xor via memcpy to avoid NaN UB from bit_cast XOR
-                uint8_t val_bytes[sizeof(T)];
-                uint8_t key_bytes[sizeof(T)];
-                memcpy(val_bytes, &val, sizeof(T));
-                memcpy(key_bytes, &xor_key, sizeof(T));
-                for (size_t i = 0; i < sizeof(T); ++i)
-                    val_bytes[i] ^= key_bytes[i];
-                memcpy(&value, val_bytes, sizeof(T));
-            }
-            CW_COMPILER_BARRIER();
-        }
-
-        CW_NOINLINE T get() const {
-            CW_COMPILER_BARRIER();
-            if ((++access_count % 1000) == 0) {
-                cloakwork::anti_debug::inline_check();
-            }
-
-            if constexpr(Integral<T>) {
-                T temp = mba::sub_mba(value, static_cast<T>(xor_key & 0xFF));
-                temp ^= xor_key;
-                T out = mba::sub_mba(temp, add_key);
-                CW_COMPILER_BARRIER();
-                return out;
-            } else {
-                uint8_t val_bytes[sizeof(T)];
-                uint8_t key_bytes[sizeof(T)];
-                memcpy(val_bytes, &value, sizeof(T));
-                memcpy(key_bytes, &xor_key, sizeof(T));
-                for (size_t i = 0; i < sizeof(T); ++i)
-                    val_bytes[i] ^= key_bytes[i];
-                T result;
-                memcpy(&result, val_bytes, sizeof(T));
-                CW_COMPILER_BARRIER();
-                return result;
-            }
-        }
-
-        CW_FORCEINLINE operator T() const { return get(); }
-        CW_FORCEINLINE obfuscated_value& operator=(T val) { set(val); return *this; }
+        void set(T value) { CW_LOCK_GUARD(mutex); storage.set(value); }
+        T get() const { CW_LOCK_GUARD(mutex); return storage.get(); }
+        operator T() const { return get(); }
+        obfuscated_value& operator=(T value) { set(value); return *this; }
     };
 
     template<Integral T>
     class mba_obfuscated {
-    private:
-        T encoded{};
-        T key1{};
-        T key2{};
-
+        using U = mba::unsigned_integral_t<T>;
+        U encoded{}, key1{}, key2{};
+        mutable CW_MUTEX mutex;
     public:
-        mba_obfuscated() {
-            key1 = static_cast<T>(CW_RANDOM_RT());
-            key2 = static_cast<T>(CW_RANDOM_RT());
-            set(static_cast<T>(0));
+        mba_obfuscated() : mba_obfuscated(T{}) {}
+        mba_obfuscated(T value) { set(value); }
+        mba_obfuscated(const mba_obfuscated& other) : mba_obfuscated(other.get()) {}
+        mba_obfuscated& operator=(const mba_obfuscated& other) {
+            if (this != &other) set(other.get());
+            return *this;
         }
-
-        mba_obfuscated(T val) {
-            key1 = static_cast<T>(CW_RANDOM_RT());
-            key2 = static_cast<T>(CW_RANDOM_RT());
-            set(val);
+        CW_NOINLINE void set(T value) {
+            CW_LOCK_GUARD(mutex);
+            key1 = static_cast<U>(CW_RANDOM_RT());
+            key2 = static_cast<U>(CW_RANDOM_RT());
+            encoded = mba::add_mba<U, 2>(static_cast<U>(value), key1) ^ key2;
         }
-
-        CW_NOINLINE void set(T val) {
-            CW_COMPILER_BARRIER();
-            // encode using MBA: encoded = (val + key1) ^ key2
-            T temp = mba::add_mba(val, key1);
-            encoded = temp ^ key2;
-            CW_COMPILER_BARRIER();
-        }
-
         CW_NOINLINE T get() const {
-            CW_COMPILER_BARRIER();
-            // decode using MBA: val = (encoded ^ key2) - key1
-            T temp = encoded ^ key2;
-            T out = mba::sub_mba(temp, key1);
-            CW_COMPILER_BARRIER();
-            return out;
+            CW_LOCK_GUARD(mutex);
+            return mba::from_unsigned<T>(mba::sub_mba<U>(static_cast<U>(encoded ^ key2), key1));
         }
-
-        CW_FORCEINLINE operator T() const { return get(); }
-        CW_FORCEINLINE mba_obfuscated& operator=(T val) { set(val); return *this; }
+        operator T() const { return get(); }
+        mba_obfuscated& operator=(T value) { set(value); return *this; }
     };
 
-#endif // CW_KERNEL_MODE (value obfuscation kernel/user split)
 
     namespace bool_obfuscation {
 
         // CW_NOINLINE prevents LTCG from constant-folding the result
-        template<int N = CW_RAND_CT(0, 7)>
+        template<int N = CW_DETAIL_RAND_CT(0, 7)>
         CW_NOINLINE bool obfuscated_true() {
             volatile int seed = static_cast<int>(reinterpret_cast<uintptr_t>(&seed) & 0xFF) + N;
             CW_COMPILER_BARRIER();
@@ -3997,12 +2947,12 @@ namespace cloakwork {
             return result;
         }
 
-        template<int N = CW_RAND_CT(0, 7)>
+        template<int N = CW_DETAIL_RAND_CT(0, 7)>
         CW_NOINLINE bool obfuscated_false() {
             return !obfuscated_true<N>();
         }
 
-        template<int N = CW_RAND_CT(1, 1000)>
+        template<int N = CW_DETAIL_RAND_CT(1, 1000)>
         CW_FORCEINLINE bool obfuscate_bool(bool value) {
             CW_COMPILER_BARRIER();
 
@@ -4023,96 +2973,21 @@ namespace cloakwork {
             return result;
         }
 
-        template<uint8_t Key1 = static_cast<uint8_t>(CW_RAND_CT(1, 255)),
-                 uint8_t Key2 = static_cast<uint8_t>(CW_RAND_CT(1, 255)),
-                 uint8_t Key3 = static_cast<uint8_t>(CW_RAND_CT(1, 255))>
+        template<uint8_t Key1 = static_cast<uint8_t>(CW_DETAIL_RAND_CT(1, 255)),
+                 uint8_t Key2 = static_cast<uint8_t>(CW_DETAIL_RAND_CT(1, 255)),
+                 uint8_t Key3 = static_cast<uint8_t>(CW_DETAIL_RAND_CT(1, 255))>
         class obfuscated_bool {
-        private:
-            mutable uint8_t encoded_primary;
-            mutable uint8_t encoded_secondary;
-            mutable uint8_t encoded_tertiary;
-            mutable CW_ATOMIC(uint32_t) access_count{0};
-
-            // distinct patterns for true/false that don't look like 0/1
-            static constexpr uint8_t TRUE_PATTERN = Key1 ^ 0xAA ^ Key2;
-            static constexpr uint8_t FALSE_PATTERN = Key1 ^ 0x55 ^ Key3;
-            static constexpr uint8_t VERIFY_MASK = Key2 ^ Key3;
-            static constexpr uint8_t TRUE_MODE = 0xA5u;
-            static constexpr uint8_t FALSE_MODE = 0x5Au;
-
-            CW_FORCEINLINE void encode(bool value) {
-                uint8_t runtime_noise = static_cast<uint8_t>(CW_RANDOM_RT() & 0xF0);
-
-                if (value) {
-                    encoded_primary = TRUE_PATTERN ^ runtime_noise;
-                    encoded_secondary = encoded_primary ^ Key1 ^ TRUE_MODE;
-                    encoded_tertiary = static_cast<uint8_t>(
-                        (encoded_primary + encoded_secondary + Key2) ^ VERIFY_MASK);
-                } else {
-                    encoded_primary = FALSE_PATTERN ^ runtime_noise;
-                    encoded_secondary = encoded_primary ^ Key1 ^ FALSE_MODE;
-                    encoded_tertiary = static_cast<uint8_t>(
-                        (encoded_primary + encoded_secondary + Key3) ^ static_cast<uint8_t>(~VERIFY_MASK));
-                }
-            }
-
-            CW_FORCEINLINE bool decode() const {
-                uint8_t true_secondary = encoded_primary ^ Key1 ^ TRUE_MODE;
-                uint8_t false_secondary = encoded_primary ^ Key1 ^ FALSE_MODE;
-
-                uint8_t true_tertiary = static_cast<uint8_t>(
-                    (encoded_primary + true_secondary + Key2) ^ VERIFY_MASK);
-                uint8_t false_tertiary = static_cast<uint8_t>(
-                    (encoded_primary + false_secondary + Key3) ^ static_cast<uint8_t>(~VERIFY_MASK));
-
-                bool is_true_pattern =
-                    encoded_secondary == true_secondary &&
-                    encoded_tertiary == true_tertiary;
-                bool is_false_pattern =
-                    encoded_secondary == false_secondary &&
-                    encoded_tertiary == false_tertiary;
-
-                if (!is_true_pattern || is_false_pattern) return false;
-
-                // use MBA to compute final result
-                int true_indicator = 1;
-                int one = mba::sub_mba(2, 1);
-                return mba::sub_mba(true_indicator, 0) == one;
-            }
-
+            obfuscated_value<bool> value;
         public:
-            obfuscated_bool() { encode(false); }
-            obfuscated_bool(bool value) { encode(value); }
-
-            CW_FORCEINLINE bool get() const {
-                // periodic anti-debug check
-                if ((++access_count % 500) == 0) {
-                    cloakwork::anti_debug::inline_check();
-                }
-
-                bool raw_value = decode();
-                // return through obfuscation layer
-                return obfuscate_bool(raw_value);
-            }
-
-            CW_FORCEINLINE void set(bool value) {
-                encode(value);
-            }
-
-            CW_FORCEINLINE operator bool() const { return get(); }
-            CW_FORCEINLINE obfuscated_bool& operator=(bool value) { set(value); return *this; }
-
-            CW_FORCEINLINE obfuscated_bool operator!() const {
-                return obfuscated_bool(!get());
-            }
-
-            CW_FORCEINLINE obfuscated_bool operator&&(bool other) const {
-                return obfuscated_bool(get() && other);
-            }
-
-            CW_FORCEINLINE obfuscated_bool operator||(bool other) const {
-                return obfuscated_bool(get() || other);
-            }
+            obfuscated_bool() : value(false) {}
+            obfuscated_bool(bool initial) : value(initial) {}
+            bool get() const { return value.get(); }
+            void set(bool next) { value.set(next); }
+            operator bool() const { return get(); }
+            obfuscated_bool& operator=(bool next) { set(next); return *this; }
+            obfuscated_bool operator!() const { return obfuscated_bool(!get()); }
+            obfuscated_bool operator&&(bool other) const { return obfuscated_bool(get() && other); }
+            obfuscated_bool operator||(bool other) const { return obfuscated_bool(get() || other); }
         };
     }
 
@@ -4122,8 +2997,8 @@ namespace cloakwork {
 
     #define CW_ADD(a, b) (cloakwork::mba::add_mba<decltype((a)+(b)), CW_RAND_CT(0, 7)>((a), (b)))
     #define CW_SUB(a, b) (cloakwork::mba::sub_mba<decltype((a)-(b)), CW_RAND_CT(0, 7)>((a), (b)))
-    #define CW_AND(a, b) (cloakwork::mba::and_mba((a), (b)))
-    #define CW_OR(a, b) (cloakwork::mba::or_mba((a), (b)))
+    #define CW_AND(a, b) (cloakwork::mba::and_mba_once((a), (b)))
+    #define CW_OR(a, b) (cloakwork::mba::or_mba_once((a), (b)))
 
 #else
     template<typename T>
@@ -4187,9 +3062,9 @@ namespace cloakwork {
     namespace control_flow {
 
         /*++
-        
+
         Control flow transforms.
-        
+
         --*/
 
 
@@ -4375,7 +3250,7 @@ namespace cloakwork {
 
         // rotate between predicate types per call site using compile-time random.
         // CW_NOINLINE prevents LTCG from inlining and resolving the predicate chain.
-        template<int N = CW_RAND_CT(0, 7)>
+        template<int N = CW_DETAIL_RAND_CT(0, 7)>
         CW_NOINLINE bool opaque_true() {
             volatile uint32_t seed = static_cast<uint32_t>(
                 reinterpret_cast<uintptr_t>(&seed) & 0xFF) + static_cast<uint32_t>(N);
@@ -4408,7 +3283,7 @@ namespace cloakwork {
             return result;
         }
 
-        template<int N = CW_RAND_CT(0, 7)>
+        template<int N = CW_DETAIL_RAND_CT(0, 7)>
         CW_NOINLINE bool opaque_false() {
             // negate a true predicate - same decompiler resistance
             return !opaque_true<N>();
@@ -4417,176 +3292,39 @@ namespace cloakwork {
         // control flow flattening via switch-case state machine
         // generates a real dispatcher that IDA/Hex-Rays shows as a state machine
         // state transitions are XOR-encoded with a compile-time key
-        template<typename Func,
-                 uint32_t XK = CW_RANDOM_CT(),
-                 uint32_t S0 = CW_RAND_CT(10, 99),
-                 uint32_t S1 = CW_RAND_CT(100, 199),
-                 uint32_t S2 = CW_RAND_CT(200, 299),
-                 uint32_t S3 = CW_RAND_CT(300, 399),
-                 uint32_t S4 = CW_RAND_CT(400, 499),
-                 uint32_t S5 = CW_RAND_CT(500, 599),
-                 uint32_t S6 = CW_RAND_CT(600, 699),
-                 uint32_t S7 = CW_RAND_CT(700, 799)>
+        template<uint32_t Seed, typename F, typename... Args>
+        CW_NOINLINE decltype(auto) dispatch(F&& function, Args&&... args) {
+            constexpr uint32_t key = Seed | 1u;
+            volatile uint32_t state = key;
+            for (;;) {
+                switch (static_cast<uint32_t>(state) ^ key) {
+                    case 0: state = 1u ^ key; break;
+                    case 1: state = (opaque_true<>() ? 2u : 3u) ^ key; break;
+                    case 2:
+                        CW_COMPILER_BARRIER();
+                        return std::invoke(std::forward<F>(function), std::forward<Args>(args)...);
+                    case 3: state = 2u ^ key; break;
+                    default: throw std::logic_error("Cloakwork dispatcher state is invalid");
+                }
+            }
+        }
+
+        template<typename Func, uint32_t XK = static_cast<uint32_t>(CW_BUILD_SEED),
+                 uint32_t S0 = 0, uint32_t S1 = 1, uint32_t S2 = 2, uint32_t S3 = 3,
+                 uint32_t S4 = 4, uint32_t S5 = 5, uint32_t S6 = 6, uint32_t S7 = 7>
         class flattened_flow {
         public:
             template<typename... Args>
-            CW_NOINLINE auto execute(Func func, Args&&... args) -> decltype(func(std::forward<Args>(args)...)) {
-                using ResultType = decltype(func(std::forward<Args>(args)...));
-                ResultType result{};
-
-                // XOR-encoded state variable - decoded inside the switch
-                volatile uint32_t state = S0 ^ XK;
-                volatile uint32_t iter = 0;
-                CW_COMPILER_BARRIER();
-
-                while (iter < 64) {
-                    uint32_t decoded = static_cast<uint32_t>(state) ^ XK;
-                    CW_COMPILER_BARRIER();
-                    ++iter;
-
-                    switch (decoded) {
-                        case S0: {
-                            volatile int anchor = static_cast<int>(iter);
-                            (void)anchor;
-                            CW_COMPILER_BARRIER();
-                            state = S1 ^ XK;
-                            break;
-                        }
-                        case S1: {
-                            if (opaque_true<>()) {
-                                state = S2 ^ XK;
-                            } else {
-                                state = S5 ^ XK; // fake path
-                            }
-                            break;
-                        }
-                        case S2: {
-                            result = func(std::forward<Args>(args)...);
-                            state = S3 ^ XK;
-                            break;
-                        }
-                        case S3: {
-                            if (opaque_true<>()) {
-                                state = S4 ^ XK; // exit
-                            } else {
-                                state = S6 ^ XK; // fake path
-                            }
-                            break;
-                        }
-                        case S4: {
-                            iter = 64; // break the loop
-                            break;
-                        }
-                        case S5: {
-                            // fake computation block 1
-                            volatile int junk = 42;
-                            junk = (junk * 3 + 1) ^ static_cast<int>(iter);
-                            CW_COMPILER_BARRIER();
-                            // entangle: n*(n+1) is always even, so & 1 is always 0
-                            uint32_t _jv = static_cast<uint32_t>(static_cast<unsigned>(static_cast<int>(junk)));
-                            volatile uint32_t _jp = _jv * (_jv + 1u);
-                            CW_COMPILER_BARRIER();
-                            state = (S1 ^ XK) ^ (static_cast<uint32_t>(_jp) & 1u);
-                            break;
-                        }
-                        case S6: {
-                            // fake computation block 2
-                            volatile float junk = 2.718f;
-                            junk = junk * 3.14f + static_cast<float>(iter);
-                            CW_COMPILER_BARRIER();
-                            // entangle via De Morgan: ~(a&b) ^ (~a|~b) is always 0
-                            volatile uint32_t _ea = static_cast<uint32_t>(iter) ^ XK;
-                            volatile uint32_t _eb = static_cast<uint32_t>(junk > 0.0f ? iter + 1u : iter) ^ S6;
-                            CW_COMPILER_BARRIER();
-                            uint32_t _va = _ea, _vb = _eb;
-                            state = (S3 ^ XK) ^ (~(_va & _vb) ^ ((~_va) | (~_vb)));
-                            break;
-                        }
-                        case S7: {
-                            // fake loop block
-                            volatile int acc = 0;
-                            for (volatile int i = 0; i < 3; ++i) acc += i;
-                            CW_COMPILER_BARRIER();
-                            // entangle via MBA: (a+b) - (a^b) - ((a&b)<<1) is always 0
-                            uint32_t _av = static_cast<uint32_t>(static_cast<unsigned>(static_cast<int>(acc)));
-                            volatile uint32_t _bv = _av ^ XK;
-                            CW_COMPILER_BARRIER();
-                            uint32_t _b = _bv;
-                            state = (S0 ^ XK) ^ ((_av + _b) - (_av ^ _b) - ((_av & _b) << 1));
-                            break;
-                        }
-                        default: {
-                            // unknown state recovery
-                            state = S4 ^ XK;
-                            break;
-                        }
-                    }
-                    CW_COMPILER_BARRIER();
-                }
-
-                return result;
+            decltype(auto) execute(Func func, Args&&... args) {
+                return dispatch<XK>(
+                    func, std::forward<Args>(args)...);
             }
         };
 
         template<typename T>
         CW_NOINLINE T indirect_branch(T value) {
-            //
-            // Dispatch through volatile index into genuinely different
-            // computation paths. CW_NOINLINE + volatile prevents the
-            // compiler from merging or eliminating any path.
-            //
-            volatile T v = value;
-            volatile uint32_t idx = static_cast<uint32_t>(CW_RANDOM_RT() % 4);
             CW_COMPILER_BARRIER();
-
-            switch (static_cast<int>(idx)) {
-            case 0: {
-                // identity through volatile round-trip
-                volatile T t = v;
-                CW_COMPILER_BARRIER();
-                return static_cast<T>(t);
-            }
-            case 1: {
-                // MBA add with zero: (x ^ 0) + ((x & 0) << 1) = x
-                volatile T a = v;
-                volatile T b = static_cast<T>(0);
-                CW_COMPILER_BARRIER();
-                return static_cast<T>((a ^ b) + ((a & b) << 1));
-            }
-            case 2: {
-                // double bitwise complement: ~~x = x
-                // (skip for bool -- complement doesn't round-trip on 1-bit types)
-                if constexpr (std::is_same_v<T, bool>) {
-                    volatile T t = v;
-                    CW_COMPILER_BARRIER();
-                    return static_cast<T>(t);
-                } else {
-                    volatile T t = v;
-                    CW_COMPILER_BARRIER();
-                    T neg = ~static_cast<T>(t);
-                    volatile T store = neg;
-                    CW_COMPILER_BARRIER();
-                    return static_cast<T>(~static_cast<T>(store));
-                }
-            }
-            case 3: {
-                // rotate round-trip for integral types >= 32 bits
-                if constexpr (std::is_integral_v<T> && sizeof(T) >= 4) {
-                    volatile T t = v;
-                    CW_COMPILER_BARRIER();
-                    T rotated = std::rotl(static_cast<T>(t), 13);
-                    volatile T mid = rotated;
-                    CW_COMPILER_BARRIER();
-                    return std::rotr(static_cast<T>(mid), 13);
-                } else {
-                    volatile T t = v;
-                    CW_COMPILER_BARRIER();
-                    return static_cast<T>(t);
-                }
-            }
-            default:
-                return static_cast<T>(v);
-            }
+            return value;
         }
     }
 
@@ -4596,34 +3334,12 @@ namespace cloakwork {
     #define CW_ELSE \
         else if(cloakwork::control_flow::opaque_true<>())
 
-    #define CW_FLATTEN(func, ...) \
-        cloakwork::control_flow::flattened_flow<decltype(func)>().execute(func, __VA_ARGS__)
+    #define CW_FLATTEN(...) \
+        cloakwork::control_flow::dispatch<CW_RANDOM_CT()>(__VA_ARGS__)
 
     //
-    // converts if/else/loop control flow into a dispatcher loop with
-    // encrypted state transitions, dead blocks, and opaque predicates.
-    // produces decompiler-hostile output that IDA/Hex-Rays shows as a
-    // complex state machine rather than the original structured code.
-    //
-    // usage:
-    //   int result = CW_FLAT_FUNC(int)
-    //       CW_FLAT_VARS(int x = 0; int y = 0;)
-    //       CW_FLAT_ENTRY(0)
-    //   CW_FLAT_BEGIN
-    //       CW_FLAT_BLOCK(0)
-    //           x = input * 2;
-    //           CW_FLAT_GOTO(1)
-    //       CW_FLAT_BLOCK(1)
-    //           CW_FLAT_IF(x > 50, 2, 3)
-    //       CW_FLAT_BLOCK(2)
-    //           CW_FLAT_RETURN(x)
-    //       CW_FLAT_BLOCK(3)
-    //           x += 10;
-    //           CW_FLAT_GOTO(1)
-    //   CW_FLAT_END;
-    //
-    // every block MUST end with a transition: GOTO, IF, RETURN, or EXIT.
-    // block IDs are arbitrary unsigned integers (0-65535 recommended).
+    // Legacy state-derivation helpers retained for source compatibility.
+    // CW_PROTECT dispatches a native callable; vm::program executes bytecode.
 
     namespace cfg_flatten {
 
@@ -4747,9 +3463,7 @@ namespace cloakwork {
         template<typename F>
         CW_NOINLINE auto execute(F&& f) -> decltype(f()) {
             CW_COMPILER_BARRIER();
-            auto result = f();
-            CW_COMPILER_BARRIER();
-            return result;
+            return std::forward<F>(f)();
         }
 
         template<typename F>
@@ -4790,240 +3504,10 @@ namespace cloakwork {
     //     (use a typedef for std::pair<int,int> etc.)
 
     #define CW_PROTECT(ret_type, ...) \
-        cloakwork::cfg_flatten::execute([&]() -> ret_type { \
-            constexpr uint32_t _cw_flat_seed = \
-                static_cast<uint32_t>(__LINE__) * 0x45D9F3Bu + \
-                static_cast<uint32_t>(__COUNTER__) * 0x9E3779B9u; \
-            constexpr uint32_t _cw_flat_limit = 8192u + (_cw_flat_seed & 0x3FFFu); \
-            ret_type _cw_flat_res{}; \
-            volatile bool _cw_flat_run = true; \
-            uint32_t _cw_flat_it = 0; \
-            volatile uint32_t _cw_flat_st = _CW_FLAT_STATE(0); \
-            CW_COMPILER_BARRIER(); \
-            while (_cw_flat_run && _cw_flat_it < _cw_flat_limit) { \
-                uint32_t _cw_flat_d = static_cast<uint32_t>(_cw_flat_st); \
-                ++_cw_flat_it; \
-                CW_COMPILER_BARRIER(); \
-                switch (_cw_flat_d) { \
-                    case _CW_FLAT_DEAD(0): { \
-                        volatile uint32_t _dh = 0x811C9DC5u; \
-                        _dh ^= static_cast<uint32_t>(_cw_flat_it); \
-                        _dh *= 0x01000193u; \
-                        _dh ^= _dh >> 16; \
-                        _cw_flat_st = _CW_FLAT_DEAD(1) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 3) & 3u, _cw_flat_seed ^ 0x811C9DC5u>(static_cast<uint32_t>(_dh)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(1): { \
-                        volatile int _da = 0; \
-                        for (int _di = 0; _di < 3; ++_di) \
-                            _da = _da * 31 + _di; \
-                        _cw_flat_st = _CW_FLAT_DEAD(2) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 5) & 3u, _cw_flat_seed ^ 0x01000193u>(static_cast<uint32_t>(static_cast<unsigned>(_da))); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(2): { \
-                        volatile uint32_t _dx = _cw_flat_it; \
-                        _dx ^= _dx << 13; \
-                        _dx ^= _dx >> 17; \
-                        _dx ^= _dx << 5; \
-                        _cw_flat_st = _CW_FLAT_DEAD(3) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 7) & 3u, _cw_flat_seed ^ 0x119DE1F3u>(static_cast<uint32_t>(_dx)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(3): { \
-                        volatile int _dc = static_cast<int>(_cw_flat_it) & 0xFF; \
-                        uint32_t _de3 = cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 9) & 3u, _cw_flat_seed ^ 0x27D4EB2Du>(static_cast<uint32_t>(static_cast<unsigned>(_dc))); \
-                        if (_dc > 128) { _cw_flat_st = _CW_FLAT_DEAD(4) ^ _de3; } \
-                        else { _cw_flat_st = _CW_FLAT_DEAD(0) ^ _de3; } \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(4): { \
-                        volatile int _ds; \
-                        volatile uintptr_t _dp = reinterpret_cast<uintptr_t>(&_ds); \
-                        _ds = static_cast<int>(_dp & 0xFFu); \
-                        _cw_flat_st = _CW_FLAT_DEAD(5) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 11) & 3u, _cw_flat_seed ^ 0x297A2D39u>(static_cast<uint32_t>(static_cast<unsigned>(_ds))); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(5): { \
-                        volatile uint32_t _dm = _cw_flat_it * 0x45D9F3Bu; \
-                        _dm ^= _dm >> 16; \
-                        _dm += 0x119DE1F3u; \
-                        _cw_flat_st = _CW_FLAT_DEAD(0) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 13) & 3u, _cw_flat_seed ^ 0x45D9F3Bu>(static_cast<uint32_t>(_dm)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(0): { \
-                        CW_COMPILER_BARRIER(); \
-                        volatile uint32_t _ep = _cw_flat_it; \
-                        _ep ^= _ep << 7; \
-                        if (cloakwork::control_flow::opaque_true<>()) { \
-                            _cw_flat_st = _CW_FLAT_STATE(1); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_DEAD(0); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(1): { \
-                        CW_COMPILER_BARRIER(); \
-                        volatile uint32_t _op = (_cw_flat_it | 2u); \
-                        if ((_op * (_op - 1u)) & 1u) { \
-                            _cw_flat_st = _CW_FLAT_DEAD(3); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_STATE(2); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(2): { \
-                        CW_COMPILER_BARRIER(); \
-                        _cw_flat_res = [&]() -> ret_type { __VA_ARGS__ }(); \
-                        CW_COMPILER_BARRIER(); \
-                        _cw_flat_st = _CW_FLAT_STATE(3); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(3): { \
-                        CW_COMPILER_BARRIER(); \
-                        if (cloakwork::control_flow::opaque_true<>()) { \
-                            _cw_flat_st = _CW_FLAT_STATE(4); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_DEAD(5); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(4): { \
-                        _cw_flat_run = false; \
-                        break; \
-                    } \
-                    default: { \
-                        _cw_flat_run = false; \
-                        break; \
-                    } \
-                } \
-                CW_COMPILER_BARRIER(); \
-            } \
-            return _cw_flat_res; \
-        })
+        (cloakwork::control_flow::dispatch<CW_RANDOM_CT()>([&]() -> ret_type { __VA_ARGS__ }))
 
     #define CW_PROTECT_VOID(...) \
-        cloakwork::cfg_flatten::execute_void([&]() { \
-            constexpr uint32_t _cw_flat_seed = \
-                static_cast<uint32_t>(__LINE__) * 0x45D9F3Bu + \
-                static_cast<uint32_t>(__COUNTER__) * 0x9E3779B9u; \
-            constexpr uint32_t _cw_flat_limit = 8192u + (_cw_flat_seed & 0x3FFFu); \
-            volatile bool _cw_flat_run = true; \
-            uint32_t _cw_flat_it = 0; \
-            volatile uint32_t _cw_flat_st = _CW_FLAT_STATE(0); \
-            CW_COMPILER_BARRIER(); \
-            while (_cw_flat_run && _cw_flat_it < _cw_flat_limit) { \
-                uint32_t _cw_flat_d = static_cast<uint32_t>(_cw_flat_st); \
-                ++_cw_flat_it; \
-                CW_COMPILER_BARRIER(); \
-                switch (_cw_flat_d) { \
-                    case _CW_FLAT_DEAD(0): { \
-                        volatile uint32_t _dh = 0x811C9DC5u; \
-                        _dh ^= static_cast<uint32_t>(_cw_flat_it); \
-                        _dh *= 0x01000193u; \
-                        _dh ^= _dh >> 16; \
-                        _cw_flat_st = _CW_FLAT_DEAD(1) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 3) & 3u, _cw_flat_seed ^ 0x811C9DC5u>(static_cast<uint32_t>(_dh)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(1): { \
-                        volatile int _da = 0; \
-                        for (int _di = 0; _di < 3; ++_di) \
-                            _da = _da * 31 + _di; \
-                        _cw_flat_st = _CW_FLAT_DEAD(2) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 5) & 3u, _cw_flat_seed ^ 0x01000193u>(static_cast<uint32_t>(static_cast<unsigned>(_da))); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(2): { \
-                        volatile uint32_t _dx = _cw_flat_it; \
-                        _dx ^= _dx << 13; \
-                        _dx ^= _dx >> 17; \
-                        _dx ^= _dx << 5; \
-                        _cw_flat_st = _CW_FLAT_DEAD(3) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 7) & 3u, _cw_flat_seed ^ 0x119DE1F3u>(static_cast<uint32_t>(_dx)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(3): { \
-                        volatile int _dc = static_cast<int>(_cw_flat_it) & 0xFF; \
-                        uint32_t _de3 = cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 9) & 3u, _cw_flat_seed ^ 0x27D4EB2Du>(static_cast<uint32_t>(static_cast<unsigned>(_dc))); \
-                        if (_dc > 128) { _cw_flat_st = _CW_FLAT_DEAD(4) ^ _de3; } \
-                        else { _cw_flat_st = _CW_FLAT_DEAD(0) ^ _de3; } \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(4): { \
-                        volatile int _ds; \
-                        volatile uintptr_t _dp = reinterpret_cast<uintptr_t>(&_ds); \
-                        _ds = static_cast<int>(_dp & 0xFFu); \
-                        _cw_flat_st = _CW_FLAT_DEAD(5) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 11) & 3u, _cw_flat_seed ^ 0x297A2D39u>(static_cast<uint32_t>(static_cast<unsigned>(_ds))); \
-                        break; \
-                    } \
-                    case _CW_FLAT_DEAD(5): { \
-                        volatile uint32_t _dm = _cw_flat_it * 0x45D9F3Bu; \
-                        _dm ^= _dm >> 16; \
-                        _dm += 0x119DE1F3u; \
-                        _cw_flat_st = _CW_FLAT_DEAD(0) ^ \
-                            cloakwork::cfg_flatten::entangle::zero<(_cw_flat_seed >> 13) & 3u, _cw_flat_seed ^ 0x45D9F3Bu>(static_cast<uint32_t>(_dm)); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(0): { \
-                        CW_COMPILER_BARRIER(); \
-                        volatile uint32_t _ep = _cw_flat_it; \
-                        _ep ^= _ep << 7; \
-                        if (cloakwork::control_flow::opaque_true<>()) { \
-                            _cw_flat_st = _CW_FLAT_STATE(1); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_DEAD(0); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(1): { \
-                        CW_COMPILER_BARRIER(); \
-                        volatile uint32_t _op = (_cw_flat_it | 2u); \
-                        if ((_op * (_op - 1u)) & 1u) { \
-                            _cw_flat_st = _CW_FLAT_DEAD(3); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_STATE(2); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(2): { \
-                        CW_COMPILER_BARRIER(); \
-                        [&]() { __VA_ARGS__ }(); \
-                        CW_COMPILER_BARRIER(); \
-                        _cw_flat_st = _CW_FLAT_STATE(3); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(3): { \
-                        CW_COMPILER_BARRIER(); \
-                        if (cloakwork::control_flow::opaque_true<>()) { \
-                            _cw_flat_st = _CW_FLAT_STATE(4); \
-                        } else { \
-                            _cw_flat_st = _CW_FLAT_DEAD(5); \
-                        } \
-                        CW_COMPILER_BARRIER(); \
-                        break; \
-                    } \
-                    case _CW_FLAT_STATE(4): { \
-                        _cw_flat_run = false; \
-                        break; \
-                    } \
-                    default: { \
-                        _cw_flat_run = false; \
-                        break; \
-                    } \
-                } \
-                CW_COMPILER_BARRIER(); \
-            } \
-        })
+        (cloakwork::control_flow::dispatch<CW_RANDOM_CT()>([&]() { __VA_ARGS__ }))
 
 #else
     namespace control_flow {
@@ -5051,6 +3535,9 @@ namespace cloakwork {
     template<typename Func>
     class obfuscated_call {
     private:
+        using pointer = std::conditional_t<std::is_pointer_v<detail::clean_value_t<Func>>,
+            detail::clean_value_t<Func>, std::add_pointer_t<Func>>;
+        static_assert(std::is_function_v<std::remove_pointer_t<pointer>>, "CW_CALL requires a function or function pointer");
         // runtime-keyed function pointer encryption
         uint8_t encrypted_addr[sizeof(uintptr_t)];
         uint32_t pk0, pk1, pk2, pk3;
@@ -5061,23 +3548,23 @@ namespace cloakwork {
         size_t decoy_count;
         size_t real_index;
 
-        CW_FORCEINLINE void encrypt_ptr(Func* ptr) {
+        CW_FORCEINLINE void encrypt_ptr(pointer ptr) {
             uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
             memcpy(encrypted_addr, &addr, sizeof(uintptr_t));
             string_encrypt::cipher::rt_encrypt(encrypted_addr, sizeof(uintptr_t), pk0, pk1, pk2, pk3);
         }
 
-        CW_FORCEINLINE Func* decrypt_ptr() const {
+        CW_FORCEINLINE pointer decrypt_ptr() const {
             uint8_t temp[sizeof(uintptr_t)];
             memcpy(temp, encrypted_addr, sizeof(uintptr_t));
             string_encrypt::cipher::rt_encrypt(temp, sizeof(uintptr_t), pk0, pk1, pk2, pk3);
             uintptr_t addr;
             memcpy(&addr, temp, sizeof(uintptr_t));
-            return reinterpret_cast<Func*>(addr);
+            return reinterpret_cast<pointer>(addr);
         }
 
     public:
-        obfuscated_call(Func* func) {
+        obfuscated_call(pointer func) {
             pk0 = static_cast<uint32_t>(CW_RANDOM_RT());
             pk1 = static_cast<uint32_t>(CW_RANDOM_RT());
             pk2 = static_cast<uint32_t>(CW_RANDOM_RT());
@@ -5098,13 +3585,13 @@ namespace cloakwork {
         }
 
         template<typename... Args>
-        CW_FORCEINLINE auto operator()(Args&&... args) {
+        CW_FORCEINLINE decltype(auto) operator()(Args&&... args) const {
             static CW_ATOMIC(uint32_t) call_count{0};
             if ((++call_count % 100) == 0) {
                 cloakwork::anti_debug::inline_check();
             }
 
-            Func* real_func = decrypt_ptr();
+            pointer real_func = decrypt_ptr();
             return real_func(std::forward<Args>(args)...);
         }
     };
@@ -5128,6 +3615,7 @@ namespace cloakwork {
         template<typename T, size_t Chunks = detail::default_scatter_chunks_v<T>>
         class scattered_value {
         private:
+            static_assert(std::is_trivially_copyable_v<T>, "Scattered values must be trivially copyable");
             static_assert(Chunks > 1 && Chunks <= 64, "Chunks must be between 2 and 64");
             static_assert(sizeof(T) >= Chunks || Chunks == 2, "Too many chunks for type size");
 
@@ -5137,12 +3625,16 @@ namespace cloakwork {
                 uint8_t xor_key;
 
                 chunk_holder() : size(0), xor_key(0) {}
+                chunk_holder(chunk_holder&&) noexcept = default;
+                chunk_holder& operator=(chunk_holder&&) noexcept = default;
+                ~chunk_holder() { if (data) detail::wipe(data.get(), size); }
             };
 
             std::array<chunk_holder, Chunks> chunks;
             mutable CW_MUTEX mutex;
 
             void scatter_data(const T& value) {
+                std::array<chunk_holder, Chunks> replacement;
                 const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&value);
                 size_t bytes_per_chunk = sizeof(T) / Chunks;
                 size_t remainder = sizeof(T) % Chunks;
@@ -5150,14 +3642,15 @@ namespace cloakwork {
 
                 for(size_t i = 0; i < Chunks; ++i) {
                     size_t chunk_size = bytes_per_chunk + (i < remainder ? 1 : 0);
-                    chunks[i].size = chunk_size;
-                    chunks[i].data = std::make_unique<uint8_t[]>(chunk_size);
-                    chunks[i].xor_key = static_cast<uint8_t>(CW_RANDOM_RT());
+                    replacement[i].size = chunk_size;
+                    replacement[i].data = std::make_unique<uint8_t[]>(chunk_size);
+                    replacement[i].xor_key = static_cast<uint8_t>(CW_RANDOM_RT());
 
                     for(size_t j = 0; j < chunk_size && byte_idx < sizeof(T); ++j, ++byte_idx) {
-                        chunks[i].data[j] = bytes[byte_idx] ^ chunks[i].xor_key;
+                        replacement[i].data[j] = bytes[byte_idx] ^ replacement[i].xor_key;
                     }
                 }
+                chunks.swap(replacement);
             }
 
         public:
@@ -5172,8 +3665,8 @@ namespace cloakwork {
 
             CW_FORCEINLINE T get() const {
                 CW_LOCK_GUARD(mutex);
-                T result;
-                uint8_t* result_bytes = reinterpret_cast<uint8_t*>(&result);
+                std::array<uint8_t, sizeof(T)> result{};
+                uint8_t* result_bytes = result.data();
                 size_t byte_idx = 0;
 
                 for(size_t i = 0; i < Chunks; ++i) {
@@ -5182,7 +3675,9 @@ namespace cloakwork {
                     }
                 }
 
-                return result;
+                T value = std::bit_cast<T>(result);
+                detail::wipe(result.data(), result.size());
+                return value;
             }
 
             CW_FORCEINLINE operator T() const { return get(); }
@@ -5195,89 +3690,27 @@ namespace cloakwork {
 
         template<Arithmetic T>
         class polymorphic_value {
-        private:
-            mutable T value;
-            mutable CW_ATOMIC(uint32_t) mutation_count{0};
+            mutable detail::encoded_storage<T> storage;
+            mutable uint32_t access_count = 0;
             mutable CW_MUTEX mutex;
-
-            CW_FORCEINLINE void mutate() const {
-                if(++mutation_count % 100 == 0) {
-                    CW_LOCK_GUARD(mutex);
-                    T temp = value;
-
-                    uint32_t transform = CW_RANDOM_RT() % 4;
-                    CW_COMPILER_BARRIER();
-
-                    switch(transform) {
-                        case 0:
-                            if constexpr(Integral<T> && sizeof(T) <= sizeof(uint64_t)) {
-                                if constexpr(sizeof(T) == 8) {
-                                    uint64_t bits = std::bit_cast<uint64_t>(temp);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                    bits = std::bit_cast<uint64_t>(value);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                } else if constexpr(sizeof(T) == 4) {
-                                    uint32_t bits = std::bit_cast<uint32_t>(temp);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                    bits = std::bit_cast<uint32_t>(value);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                } else if constexpr(sizeof(T) == 2) {
-                                    uint16_t bits = std::bit_cast<uint16_t>(temp);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                    bits = std::bit_cast<uint16_t>(value);
-                                    bits = ~bits;
-                                    value = std::bit_cast<T>(bits);
-                                } else {
-                                    value = temp;
-                                }
-                            }
-                            break;
-                        case 1:
-                            if constexpr(std::is_unsigned_v<T> && Integral<T>) {
-                                value = std::rotl(value, 1);
-                                value = std::rotr(value, 1);
-                            }
-                            break;
-                        case 2:
-                            if constexpr(Integral<T>) {
-                                using U = std::make_unsigned_t<T>;
-                                U bits = static_cast<U>(temp);
-                                U key = static_cast<U>(mutation_count.load());
-                                bits += key;
-                                bits -= key;
-                                value = std::bit_cast<T>(bits);
-                            } else if constexpr(Arithmetic<T>) {
-                                T key = static_cast<T>(mutation_count.load());
-                                value = temp + key;
-                                value = value - key;
-                            }
-                            break;
-                        case 3:
-                            break;
-                    }
-                }
-            }
-
         public:
-            polymorphic_value() : value{} {}
-            polymorphic_value(T val) : value(val) {}
-
-            CW_FORCEINLINE T get() const {
-                mutate();
+            polymorphic_value() = default;
+            polymorphic_value(T value) : storage(value) {}
+            polymorphic_value(const polymorphic_value& other) : storage(other.get()) {}
+            polymorphic_value& operator=(const polymorphic_value& other) {
+                if (this != &other) set(other.get());
+                return *this;
+            }
+            T get() const {
+                CW_LOCK_GUARD(mutex);
+                T value = storage.get();
+                if (++access_count % 100u == 0) storage.set(value);
                 return value;
             }
-
-            CW_FORCEINLINE void set(T val) {
-                value = val;
-                mutate();
-            }
-
-            CW_FORCEINLINE operator T() const { return get(); }
+            void set(T value) { CW_LOCK_GUARD(mutex); storage.set(value); }
+            void rekey() { CW_LOCK_GUARD(mutex); storage.set(storage.get()); }
+            operator T() const { return get(); }
+            polymorphic_value& operator=(T value) { set(value); return *this; }
         };
     }
 #else
@@ -5385,78 +3818,45 @@ namespace cloakwork {
 
         template<typename Func>
         class metamorphic_function {
-        private:
             Func* real_func;
-            mutable CW_ATOMIC(uint32_t) call_count{0};
-
 #if defined(_WIN64) && !CW_KERNEL_MODE
-            static constexpr uint32_t REGEN_INTERVAL = 1000;
-            mutable uint8_t* thunk = nullptr;
-            mutable uint8_t* retired_thunk = nullptr;  // deferred free, prevents use-after-free
-            mutable CW_MUTEX mutex;
+            mutable std::shared_ptr<uint8_t> thunk;
+            mutable std::mutex mutex;
+            mutable uint32_t call_count = 0;
+            static std::shared_ptr<uint8_t> make_thunk(Func* function) {
+                return {thunk_gen::generate_thunk(reinterpret_cast<void*>(function)), thunk_gen::free_thunk};
+            }
 #endif
-
         public:
-            metamorphic_function(std::initializer_list<Func*> funcs) {
-                real_func = *funcs.begin();
-
+            metamorphic_function(std::initializer_list<Func*> funcs)
+                : metamorphic_function(funcs.size() ? *funcs.begin() : nullptr) {}
+            metamorphic_function(Func* function) : real_func(function) {
+                if (!function) throw std::invalid_argument("Cloakwork requires a non-null function");
 #if defined(_WIN64) && !CW_KERNEL_MODE
-                thunk = thunk_gen::generate_thunk(reinterpret_cast<void*>(real_func));
+                thunk = make_thunk(function);
 #endif
             }
-
-            metamorphic_function(Func* func) : real_func(func) {
-#if defined(_WIN64) && !CW_KERNEL_MODE
-                thunk = thunk_gen::generate_thunk(reinterpret_cast<void*>(real_func));
-#endif
-            }
-
-            ~metamorphic_function() {
-#if defined(_WIN64) && !CW_KERNEL_MODE
-                thunk_gen::free_thunk(thunk);
-                thunk_gen::free_thunk(retired_thunk);
-#endif
-            }
-
             metamorphic_function(const metamorphic_function&) = delete;
             metamorphic_function& operator=(const metamorphic_function&) = delete;
-
-            metamorphic_function(metamorphic_function&& other) noexcept
-                : real_func(other.real_func), call_count(other.call_count.load()) {
+            metamorphic_function(metamorphic_function&& other) noexcept : real_func(other.real_func) {
 #if defined(_WIN64) && !CW_KERNEL_MODE
-                thunk = other.thunk;
-                retired_thunk = other.retired_thunk;
-                other.thunk = nullptr;
-                other.retired_thunk = nullptr;
+                thunk = std::move(other.thunk);
 #endif
             }
-
             template<typename... Args>
-            CW_FORCEINLINE auto operator()(Args&&... args) const {
-                uint32_t count = ++call_count;
-
+            decltype(auto) operator()(Args&&... args) const {
 #if defined(_WIN64) && !CW_KERNEL_MODE
-                // regenerate thunk every N calls - different machine code each time
-                // retired_thunk defers the free by one generation so any thread
-                // still executing on the old page finishes before it's released
-                if (thunk && (count % REGEN_INTERVAL) == 0) {
-                    CW_LOCK_GUARD(mutex);
-                    uint8_t* new_thunk = thunk_gen::generate_thunk(reinterpret_cast<void*>(real_func));
-                    if (new_thunk) {
-                        thunk_gen::free_thunk(retired_thunk);
-                        retired_thunk = thunk;
-                        const_cast<uint8_t*&>(thunk) = new_thunk;
+                std::shared_ptr<uint8_t> active;
+                {
+                    std::lock_guard<std::mutex> guard(mutex);
+                    if (++call_count % 1000u == 0) {
+                        auto replacement = make_thunk(real_func);
+                        if (replacement) thunk = std::move(replacement);
                     }
+                    active = thunk;
                 }
-
-                if (thunk) {
-                    auto thunk_fn = reinterpret_cast<Func*>(thunk);
-                    return thunk_fn(std::forward<Args>(args)...);
-                }
-#else
-                (void)count;
+                if (active) return reinterpret_cast<Func*>(active.get())(std::forward<Args>(args)...);
 #endif
-
                 return real_func(std::forward<Args>(args)...);
             }
         };
@@ -5997,65 +4397,35 @@ namespace cloakwork {
 
 #if CW_ENABLE_VALUE_OBFUSCATION
     namespace comparison {
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_equals(T a, T b) {
-            if constexpr (std::is_integral_v<T>) {
-                // (a == b) <=> ((a ^ b) == 0)
-                T diff = a ^ b;
-                // use MBA to check if zero
-                T zero_check = mba::sub_mba(diff, diff);
-                CW_COMPILER_BARRIER();
-                return zero_check == static_cast<T>(0) && diff == static_cast<T>(0);
-            } else {
-                return a == b;
-            }
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_equals(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a == b;
         }
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_not_equals(T a, T b) {
-            if constexpr (std::is_integral_v<T>) {
-                T diff = a ^ b;
-                CW_COMPILER_BARRIER();
-                return diff != static_cast<T>(0);
-            } else {
-                return a != b;
-            }
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_not_equals(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a != b;
         }
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_less(T a, T b) {
-            if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
-                using U = std::make_unsigned_t<T>;
-                constexpr U sign_bit = U(1) << ((sizeof(T) * 8) - 1);
-                U ua = static_cast<U>(a);
-                U ub = static_cast<U>(b);
-                bool sign_diff = ((ua ^ ub) & sign_bit) != 0;
-                bool result = sign_diff ? ((ua & sign_bit) != 0) : (ua < ub);
-                CW_COMPILER_BARRIER();
-                return result;
-            } else if constexpr (std::is_integral_v<T>) {
-                // unsigned comparison via subtraction with overflow check
-                CW_COMPILER_BARRIER();
-                return a < b;  // fall back for unsigned
-            } else {
-                return a < b;
-            }
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_less(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a < b;
         }
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_greater(T a, T b) {
-            return obfuscated_less(b, a);
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_greater(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a > b;
         }
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_less_equal(T a, T b) {
-            return !obfuscated_greater(a, b);
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_less_equal(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a <= b;
         }
-
-        template<typename T>
-        CW_FORCEINLINE bool obfuscated_greater_equal(T a, T b) {
-            return !obfuscated_less(a, b);
+        template<typename A, typename B>
+        CW_NOINLINE bool obfuscated_greater_equal(const A& a, const B& b) {
+            CW_COMPILER_BARRIER();
+            return a >= b;
         }
     }
 
@@ -6074,14 +4444,149 @@ namespace cloakwork {
     #define CW_GE(a, b) ((a) >= (b))
 #endif
 
+#if !CW_KERNEL_MODE
+    // Explicit integer bytecode. Native C++ bodies passed to CW_PROTECT are not
+    // translated into these instructions. Programs are immutable and shareable.
+    namespace vm {
+        enum class opcode : uint8_t {
+            constant, argument, move, add, sub, mul, bit_and, bit_or, bit_xor,
+            rotate_left, less, jump, jump_zero, ret
+        };
+        struct instruction {
+            opcode op;
+            uint8_t dst = 0, a = 0, b = 0;
+            uint64_t immediate = 0;
+        };
+        enum class error { none, missing_argument, invalid_instruction, step_limit };
+        struct result {
+            uint64_t value = 0;
+            error status = error::none;
+            size_t steps = 0;
+            explicit operator bool() const noexcept { return status == error::none; }
+        };
+
+        namespace detail {
+            constexpr uint64_t mix(uint64_t x) {
+                x ^= x >> 30;
+                x *= 0xbf58476d1ce4e5b9ULL;
+                x ^= x >> 27;
+                x *= 0x94d049bb133111ebULL;
+                return x ^ (x >> 31);
+            }
+            constexpr uint8_t inverse_byte(uint8_t odd) {
+                unsigned inverse = 1;
+                for (int i = 0; i < 3; ++i) inverse *= 2u - odd * inverse;
+                return static_cast<uint8_t>(inverse);
+            }
+        }
+
+        template<size_t N, size_t Registers = 8, uint64_t Seed = CW_BUILD_SEED>
+        class program {
+            static_assert(N > 0, "A VM program cannot be empty");
+            static_assert(Registers > 0 && Registers <= 256 && (Registers & (Registers - 1)) == 0,
+                          "Register count must be a power of two from 1 to 256");
+            std::array<uint64_t, N * 2> code{};
+            static constexpr uint8_t multiplier = static_cast<uint8_t>(Seed | 1u);
+            static constexpr uint8_t bias = static_cast<uint8_t>(Seed >> 8);
+            static constexpr size_t reg(size_t index) {
+                return (index * multiplier + bias) & (Registers - 1);
+            }
+            static constexpr uint64_t mask(size_t index) {
+                return detail::mix(Seed + (index + 1) * 0x9e3779b97f4a7c15ULL);
+            }
+            static constexpr bool valid(const instruction& i) {
+                if (static_cast<unsigned>(i.op) > static_cast<unsigned>(opcode::ret)) return false;
+                // Require every register field to be valid, including unused fields.
+                if (i.dst >= Registers || i.a >= Registers || i.b >= Registers) return false;
+                if ((i.op == opcode::jump || i.op == opcode::jump_zero) && i.immediate >= N) return false;
+                return true;
+            }
+        public:
+            consteval explicit program(const std::array<instruction, N>& input) {
+                bool has_return = false;
+                for (size_t pc = 0; pc < N; ++pc) {
+                    const auto& i = input[pc];
+                    if (!valid(i)) throw "Invalid Cloakwork VM instruction";
+                    has_return |= i.op == opcode::ret;
+                    const auto encoded_op = static_cast<uint8_t>(static_cast<uint8_t>(i.op) * multiplier + bias);
+                    const uint64_t packed = encoded_op | (uint64_t{i.dst} << 8) |
+                        (uint64_t{i.a} << 16) | (uint64_t{i.b} << 24);
+                    code[pc * 2] = packed ^ mask(pc * 2);
+                    code[pc * 2 + 1] = i.immediate ^ mask(pc * 2 + 1);
+                }
+                if (!has_return) throw "A Cloakwork VM program needs a return instruction";
+            }
+
+            // Arithmetic wraps modulo 2^64. Register reads before writes yield zero.
+            // The step budget counts fetched instructions, including return.
+            CW_NOINLINE result run(std::span<const uint64_t> arguments = {}, size_t budget = 100000) const {
+                std::array<uint64_t, Registers> registers{};
+                struct wipe_registers {
+                    std::array<uint64_t, Registers>& data;
+                    ~wipe_registers() { cloakwork::detail::wipe(data.data(), sizeof(data)); }
+                } cleanup{registers};
+                size_t pc = 0;
+                const volatile uint64_t* source = code.data();
+                for (size_t steps = 0; steps < budget; ++steps) {
+                    if (pc >= N) return {0, error::invalid_instruction, steps};
+                    const uint64_t packed = source[pc * 2] ^ mask(pc * 2);
+                    const uint64_t immediate = source[pc * 2 + 1] ^ mask(pc * 2 + 1);
+                    const auto decoded = static_cast<uint8_t>((static_cast<uint8_t>(packed) - bias) *
+                        detail::inverse_byte(multiplier));
+                    instruction i{static_cast<opcode>(decoded), static_cast<uint8_t>(packed >> 8),
+                        static_cast<uint8_t>(packed >> 16), static_cast<uint8_t>(packed >> 24), immediate};
+                    if ((packed >> 32) != 0 || !valid(i)) return {0, error::invalid_instruction, steps + 1};
+                    auto& dst = registers[reg(i.dst)];
+                    const uint64_t a = registers[reg(i.a)], b = registers[reg(i.b)];
+                    ++pc;
+                    switch (i.op) {
+                        case opcode::constant: dst = immediate; break;
+                        case opcode::argument:
+                            if (immediate >= arguments.size()) return {0, error::missing_argument, steps + 1};
+                            dst = arguments[static_cast<size_t>(immediate)]; break;
+                        case opcode::move: dst = a; break;
+                        case opcode::add:
+#if CW_ENABLE_VALUE_OBFUSCATION
+                            dst = mba::add_mba<uint64_t, static_cast<int>(Seed & 7u)>(a, b);
+#else
+                            dst = a + b;
+#endif
+                            break;
+                        case opcode::sub: dst = a - b; break;
+                        case opcode::mul: dst = a * b; break;
+                        case opcode::bit_and: dst = a & b; break;
+                        case opcode::bit_or: dst = a | b; break;
+                        case opcode::bit_xor: dst = a ^ b; break;
+                        case opcode::rotate_left: dst = std::rotl(a, static_cast<int>(b & 63u)); break;
+                        case opcode::less: dst = a < b; break;
+                        case opcode::jump: pc = static_cast<size_t>(immediate); break;
+                        case opcode::jump_zero: if (a == 0) pc = static_cast<size_t>(immediate); break;
+                        case opcode::ret: return {a, error::none, steps + 1};
+                    }
+                    CW_COMPILER_BARRIER();
+                }
+                return {0, error::step_limit, budget};
+            }
+        };
+
+        template<uint64_t Seed = CW_BUILD_SEED, size_t Registers = 8, size_t N>
+        consteval auto make_program(const std::array<instruction, N>& input) {
+            return program<N, Registers, Seed>{input};
+        }
+    }
+#endif
+
     namespace constants {
 
-        template<typename T, T Value, uint8_t Key = static_cast<uint8_t>(CW_RAND_CT(1, 255))>
+        template<typename T, T Value, uint8_t Key = static_cast<uint8_t>(CW_DETAIL_RAND_CT(1, 255))>
         struct encrypted_constant {
             // store encrypted value as a non-constexpr static to prevent the compiler
             // from seeing both the encrypted value and key in the same compile-time context,
             // which would let LTCG constant-fold the XOR back to the original value
-            static inline volatile T stored_encrypted = Value ^ static_cast<T>(Key);
+            static inline volatile T stored_encrypted = [] {
+                if constexpr (std::is_integral_v<T>) return static_cast<T>(Value ^ static_cast<T>(Key));
+                else return Value;
+            }();
 
             static CW_NOINLINE T get() {
                 CW_COMPILER_BARRIER();
@@ -6139,7 +4644,7 @@ namespace cloakwork {
         // Touches the stack in patterns typical of real hash functions,
         // with buffer init + accumulation + conditional store.
         //
-        template<int N = CW_RAND_CT(1, 1000)>
+        template<int N = CW_DETAIL_RAND_CT(1, 1000)>
         CW_NOINLINE void junk_computation() {
             volatile uint32_t state = static_cast<uint32_t>(N);
             volatile uint8_t buf[16];
@@ -6168,7 +4673,7 @@ namespace cloakwork {
         // Junk that mimics a retry loop with exponential backoff.
         // Common real-world pattern for lock acquisition or network retry.
         //
-        template<int N = CW_RAND_CT(1, 1000)>
+        template<int N = CW_DETAIL_RAND_CT(1, 1000)>
         CW_NOINLINE void junk_control_flow() {
             volatile uint32_t attempts = 0;
             volatile uint32_t backoff = static_cast<uint32_t>(N) & 0x3u;
@@ -6787,7 +5292,7 @@ namespace cloakwork {
 
     // MBA negation (completes CW_ADD / CW_SUB / CW_AND / CW_OR set)
 #if CW_ENABLE_VALUE_OBFUSCATION
-    #define CW_NEG(a)                    (cloakwork::mba::neg_mba(a))
+    #define CW_NEG(a)                    (cloakwork::mba::neg_mba<decltype(+(a))>((a)))
 #else
     #define CW_NEG(a)                    (-(a))
 #endif
@@ -6802,4 +5307,4 @@ namespace cloakwork {
     #pragma clang diagnostic pop
 #endif
 
-#endif // CLOAKWORK_H (why did you scroll down here...?)
+#endif // CLOAKWORK_H
