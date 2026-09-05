@@ -308,20 +308,6 @@ The seed selects opcode numbering, register layout, and encoding masks for each 
 
 Construction rejects invalid opcodes, registers, branch targets, and programs without a return instruction at compile time. Unreachable returns are allowed, so runtime execution is bounded. `run(arguments, budget)` defaults to 100,000 instructions. The returned `result` contains `value`, `status`, and `steps`; check it before using `value`. Errors are `missing_argument`, `invalid_instruction`, and `step_limit`. Falling off the program is an error. Return instructions count toward the budget. This VM is not a security sandbox for hostile bytecode.
 
-## Build and test
-
-The library still needs only the header. CMake builds the regression tests and, optionally, the demonstration:
-
-```powershell
-cmake -S . -B build -A x64 -DCLOAKWORK_BUILD_DEMO=ON
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
-```
-
-To check whole-program optimization, configure a separate directory with `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`. The suite covers 8 integer widths and signedness combinations, every byte/key pair in the value transform, floating-point bit patterns, VM operations and error paths, multi-file linking, concurrent access, and individual feature configurations. Configuration also checks that four invalid VM programs fail to compile. If Python is available, a binary probe verifies that three test literals are absent from the executable and decode correctly when run.
-
-These tests validate behavior and those specific binary probes. They do not measure resistance to symbolic simplification, devirtualization, debugging, or memory inspection. Legacy anti-debug, anti-VM, syscall, import, return-address, and PE-editing features have not received a complete security audit in this refactor.
-
 ---
 
 ## Kernel Mode
