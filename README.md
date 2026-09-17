@@ -40,13 +40,13 @@ auto pVirtualAlloc = CW_IMPORT("kernel32.dll", VirtualAlloc);
 ```
 
 ```cpp
-// crash if debugger detected, or check as bool
+// apply the configured response if detected, or check as bool
 CW_ANTI_DEBUG();
 if (CW_CHECK_DEBUG()) { /* debugger present */ }
 ```
 
 ```cpp
-// crash if VM/sandbox detected, or check as bool
+// apply the configured response if detected, or check as bool
 CW_ANTI_VM();
 if (CW_CHECK_VM()) { /* virtualized */ }
 ```
@@ -86,7 +86,8 @@ Define feature macros **before** including the header. All features are enabled 
 | `CW_ENABLE_ANTI_VM` | Anti-VM/sandbox detection | `1` |
 | `CW_ENABLE_INTEGRITY_CHECKS` | Code integrity verification | `1` |
 | `CW_BUILD_SEED` | Shared build seed for reproducible encodings | `0xC10A2026u` |
-| `CW_ANTI_DEBUG_RESPONSE` | Debugger response: 0=ignore, 1=crash, 2=fake data | `1` |
+| `CW_ANTI_DEBUG_RESPONSE` | Detection response: 0=ignore, 1=crash, 2=legacy no-op, 3=callback | `1` |
+| `CW_DETECTION_CALLBACK(reason)` | Host callback required by response mode 3 | Undefined |
 
 If you disable `CW_ENABLE_ALL` and selectively re-enable features, Cloakwork
 now emits compile-time errors for unsupported combinations. String encryption,
@@ -94,6 +95,50 @@ value obfuscation, anti-debug, data hiding, control flow, metamorphic code,
 function obfuscation, and import hiding depend on `CW_ENABLE_COMPILE_TIME_RANDOM`.
 Function obfuscation and syscalls also depend on import hiding because they scan
 loaded PE images for gadgets and exports.
+
+### Host-controlled detection responses
+
+`CW_ANTI_DEBUG_RESPONSE` controls `CW_ANTI_DEBUG()`, `CW_ANTI_VM()`, the periodic
+debugger check in `CW_CALL`, and failures in `CW_INTEGRITY_CHECK`. Mode `1`
+remains the default for compatibility and terminates through Windows fail-fast.
+Mode `0` ignores detections. Mode `2` preserves the old no-op behavior; Cloakwork
+does not generate fake data in that mode.
+
+For host-controlled handling, select mode `3` and define a callback before
+including the header:
+
+```cpp
+#include <cstdio>
+
+namespace cloakwork { enum class detection_reason; }
+void on_detection(cloakwork::detection_reason reason);
+
+#define CW_ANTI_DEBUG_RESPONSE 3
+#define CW_DETECTION_CALLBACK(reason) on_detection(reason)
+#include "cloakwork.h"
+
+void on_detection(cloakwork::detection_reason reason) {
+    std::fprintf(stderr, "Cloakwork detection: %d\n", static_cast<int>(reason));
+}
+```
+
+The reason is `cloakwork::detection_reason::debugger`, `virtual_machine`, or
+`integrity_failure`.
+
+The callback runs synchronously on the detecting thread, once per positive
+check. Returning lets the operation continue, including calling the wrapped
+function after an integrity failure. The host can instead terminate or, in
+user mode, throw an exception to stop the operation. Callback exceptions
+propagate to the caller. Callbacks must support concurrent calls if the host
+uses protected operations on multiple threads, and should avoid invoking
+response-producing checks recursively. Kernel callbacks run at the caller's
+IRQL and must obey its restrictions.
+
+Use the same response and callback definitions in every translation unit, with
+a shared callback declaration and one definition or an inline definition.
+Mode `3` without a callback is a compile-time error. `CW_CHECK_DEBUG()`,
+`CW_CHECK_VM()`, and `integrity_checked::verify()` remain result-only checks and
+never invoke the callback. Disabled checks do not invoke it either.
 
 ---
 
@@ -201,7 +246,7 @@ loaded PE images for gadgets and exports.
 
 | Macro | Description |
 |-------|-------------|
-| `CW_ANTI_DEBUG()` | Crashes if debugger detected (multi-technique) |
+| `CW_ANTI_DEBUG()` | Applies the configured response if a debugger is detected |
 | `CW_CHECK_DEBUG()` | Returns bool, comprehensive multi-layer detection |
 | `CW_HIDE_THREAD()` | Hide thread from debugger (ThreadHideFromDebugger) |
 
@@ -211,7 +256,7 @@ For granular checks, use the `cloakwork::anti_debug` namespace directly: `is_deb
 
 | Macro | Description |
 |-------|-------------|
-| `CW_ANTI_VM()` | Crashes if VM or sandbox detected |
+| `CW_ANTI_VM()` | Applies the configured response if a VM or sandbox is detected |
 | `CW_CHECK_VM()` | Returns bool |
 
 For individual checks, use `cloakwork::anti_debug::anti_vm`: hypervisor detection (CPUID), VM vendor string matching (VMware, VirtualBox, KVM, Xen, Parallels, QEMU), low resource detection, sandbox DLL detection, VM registry keys, VM MAC prefixes, and sandbox username/computer name detection. Hyper-V/VBS is treated as corroborating evidence rather than a standalone VM verdict to reduce false positives on modern bare-metal Windows.

@@ -151,7 +151,15 @@ Refer to the README.md for usage.
 #endif
 
 #ifndef CW_ANTI_DEBUG_RESPONSE
-    #define CW_ANTI_DEBUG_RESPONSE 1  // 0=ignore, 1=crash, 2=fake data
+    #define CW_ANTI_DEBUG_RESPONSE 1
+#endif
+
+#if CW_ANTI_DEBUG_RESPONSE < 0 || CW_ANTI_DEBUG_RESPONSE > 3
+    #error "CW_ANTI_DEBUG_RESPONSE must be 0 (ignore), 1 (crash), 2 (legacy no-op), or 3 (callback)"
+#endif
+
+#if CW_ANTI_DEBUG_RESPONSE == 3 && !defined(CW_DETECTION_CALLBACK)
+    #error "CW_ANTI_DEBUG_RESPONSE=3 requires CW_DETECTION_CALLBACK(reason)"
 #endif
 
 #if CW_ENABLE_DATA_HIDING && !CW_ENABLE_COMPILE_TIME_RANDOM
@@ -605,6 +613,12 @@ Refer to the README.md for usage.
 
 namespace cloakwork {
 
+    enum class detection_reason {
+        debugger,
+        virtual_machine,
+        integrity_failure
+    };
+
 #if !CW_KERNEL_MODE
     template<typename T>
     concept Integral = std::is_integral_v<T>;
@@ -613,6 +627,18 @@ namespace cloakwork {
 #endif
 
     namespace detail {
+        CW_FORCEINLINE void respond_to_detection([[maybe_unused]] detection_reason reason) {
+#if CW_ANTI_DEBUG_RESPONSE == 1
+    #if defined(_WIN32) || CW_KERNEL_MODE
+            __fastfail(FAST_FAIL_FATAL_APP_EXIT);
+    #else
+            std::abort();
+    #endif
+#elif CW_ANTI_DEBUG_RESPONSE == 3
+            CW_DETECTION_CALLBACK(reason);
+#endif
+        }
+
 #if !CW_KERNEL_MODE
         inline void wipe(void* data, size_t size) noexcept {
             auto bytes = static_cast<volatile uint8_t*>(data);
@@ -1813,14 +1839,10 @@ namespace cloakwork {
         }
 
         CW_FORCEINLINE void inline_check() {
-#if CW_ANTI_DEBUG_RESPONSE == 1
+#if CW_ANTI_DEBUG_RESPONSE == 1 || CW_ANTI_DEBUG_RESPONSE == 3
             if (is_debugger_present() || has_hardware_breakpoints()) {
-                __debugbreak();
-                *(volatile int*)0 = 0;
+                cloakwork::detail::respond_to_detection(detection_reason::debugger);
             }
-#elif CW_ANTI_DEBUG_RESPONSE == 2
-            // fake response mode is context-specific for callers that want decoy data
-            // implementation depends on context
 #endif
         }
 
@@ -2147,8 +2169,7 @@ namespace cloakwork {
     #define CW_ANTI_DEBUG() \
         do { \
             if(cloakwork::anti_debug::comprehensive_check()) { \
-                __debugbreak(); \
-                *(volatile int*)0 = 0; \
+                cloakwork::detail::respond_to_detection(cloakwork::detection_reason::debugger); \
             } \
         } while(0)
 
@@ -2156,8 +2177,7 @@ namespace cloakwork {
         #define CW_ANTI_VM() \
             do { \
                 if(cloakwork::anti_debug::anti_vm::comprehensive_check()) { \
-                    __debugbreak(); \
-                    *(volatile int*)0 = 0; \
+                    cloakwork::detail::respond_to_detection(cloakwork::detection_reason::virtual_machine); \
                 } \
             } while(0)
 
@@ -4888,10 +4908,7 @@ namespace cloakwork {
                         reinterpret_cast<const void*>(func), codeSize);
 
                     if (currentHash != expectedHash) {
-#if CW_ANTI_DEBUG_RESPONSE == 1
-                        __debugbreak();
-                        *(volatile int*)0 = 0;
-#endif
+                        cloakwork::detail::respond_to_detection(detection_reason::integrity_failure);
                     }
                 }
 

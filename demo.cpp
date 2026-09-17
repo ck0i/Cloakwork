@@ -7,7 +7,27 @@ in one translation unit.
 
 #include <iostream>
 #include <string>
+
+namespace cloakwork { enum class detection_reason; }
+void on_detection(cloakwork::detection_reason reason);
+
+#define CW_ANTI_DEBUG_RESPONSE 3
+#define CW_DETECTION_CALLBACK(reason) on_detection(reason)
 #include "cloakwork.h"
+
+void on_detection(cloakwork::detection_reason reason) {
+    switch (reason) {
+    case cloakwork::detection_reason::debugger:
+        std::cout << "   host callback: debugger detected, continuing demo" << std::endl;
+        break;
+    case cloakwork::detection_reason::virtual_machine:
+        std::cout << "   host callback: VM/sandbox detected, continuing demo" << std::endl;
+        break;
+    case cloakwork::detection_reason::integrity_failure:
+        std::cout << "   host callback: code changed, continuing demo" << std::endl;
+        break;
+    }
+}
 
 // simple function to demonstrate function pointer obfuscation
 int simple_add(int a, int b) {
@@ -36,7 +56,7 @@ int main() {
 
     std::cout << CW_STR("=== CLOAKWORK COMPREHENSIVE DEMO ===") << std::endl;
     std::cout << CW_STR("demonstrating obfuscation, encryption, and anti-debug features") << std::endl;
-    std::cout << CW_STR("NOTE: crash-on-debug features disabled for demo (shows detections without crashing)") << std::endl << std::endl;
+    std::cout << CW_STR("NOTE: host callback reports detections and lets the demo continue") << std::endl << std::endl;
 
     // ==================================================================
     // 1. BASIC STRING ENCRYPTION (compile-time + runtime)
@@ -105,11 +125,10 @@ int main() {
         std::cout << CW_STR("   parent process check: clean") << std::endl;
     }
 
-    // note: CW_ANTI_DEBUG() would crash if debugger detected (commented out for demo)
-    // CW_ANTI_DEBUG();
+    CW_ANTI_DEBUG();
 
     if (any_detected) {
-        std::cout << CW_STR("   NOTE: in production, CW_ANTI_DEBUG() would crash here") << std::endl;
+        std::cout << CW_STR("   NOTE: the host decides how to respond to detections") << std::endl;
     }
 
     std::cout << std::endl;
@@ -327,8 +346,7 @@ int main() {
     int secret_key = secret_key_obf.get();
 
     CW_IF(secret_key != 0) {
-        // note: CW_ANTI_DEBUG() would crash if debugger detected (commented for demo)
-        // CW_ANTI_DEBUG();
+        CW_ANTI_DEBUG();
 
         // transform the key using obfuscated operations
         auto xor_part = CW_INT(secret_key ^ 0xDEAD);
@@ -336,7 +354,7 @@ int main() {
         int transformed_key = xor_part.get() + add_part.get();
 
         std::cout << "    " << CW_STR_LAYERED("protected computation result: ") << transformed_key << std::endl;
-        std::cout << "    " << CW_STR_LAYERED("(CW_ANTI_DEBUG would protect this in production)") << std::endl;
+        std::cout << "    " << CW_STR_LAYERED("(CW_ANTI_DEBUG uses the host callback)") << std::endl;
     } CW_ELSE {
         std::cout << "    " << CW_STR("unexpected code path") << std::endl;
     }
@@ -371,7 +389,7 @@ int main() {
 
     // comprehensive check via macro
     if (CW_CHECK_DEBUG()) {
-        std::cout << CW_STR("    COMPREHENSIVE: debugger detected (CW_ANTI_DEBUG would crash)") << std::endl;
+        std::cout << CW_STR("    COMPREHENSIVE: debugger detected (result-only check)") << std::endl;
     } else {
         std::cout << CW_STR("    COMPREHENSIVE: all checks passed") << std::endl;
     }
@@ -478,10 +496,12 @@ int main() {
     }
 
     if (CW_CHECK_VM()) {
-        std::cout << CW_STR("   COMPREHENSIVE: VM/sandbox detected (CW_ANTI_VM would crash)") << std::endl;
+        std::cout << CW_STR("   COMPREHENSIVE: VM/sandbox detected (result-only check)") << std::endl;
     } else {
         std::cout << CW_STR("   COMPREHENSIVE: all VM/sandbox checks passed") << std::endl;
     }
+
+    CW_ANTI_VM();
 
     std::cout << std::endl;
 
