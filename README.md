@@ -2,14 +2,6 @@
 
 Cloakwork is a single-header C++20 obfuscation library for Windows. Include `cloakwork.h` to use encoded strings and values, mixed Boolean arithmetic, control-flow wrappers, and an explicit integer bytecode VM. Existing Windows integration APIs remain available. MSVC auto-links the Windows libraries used by the header.
 
-The current regression target is MSVC x64. Kernel interfaces remain in the header but are not covered by the user-mode test suite.
-
-Obfuscation changes how code and data appear in a binary. It does not keep secrets from someone who can inspect the running process. The custom transforms and embedded keys are recoverable; additional rounds, product terms, or bytecode do not establish cryptographic security or measured resistance to a decompiler.
-
-> Inspired by [obfusheader.h](https://github.com/ac3ss0r/obfusheader.h), Zapcrash's nimrodhide.h, and qengine.
-
-**Author:** ck0i on Discord | **License:** MIT
-
 ---
 
 ## Quick Start
@@ -411,11 +403,3 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 ### Kernel Entropy Sources
 
 Runtime random in kernel mode combines: `__rdtsc()`, `PsGetCurrentProcess()`/`PsGetCurrentThread()` (KASLR), process/thread IDs, `KeQueryPerformanceCounter()`, `KeQuerySystemTime()`, `KeQueryInterruptTime()`, pool allocation addresses, and stack addresses. Mixed via xorshift64*.
-
----
-
-## Credits & License
-
-- Inspired by [obfusheader.h](https://github.com/ac3ss0r/obfusheader.h), nimrodhide.h, qengine, and the anti-reverse-engineering community on unknowncheats.
-- Created by helz.dev/Helzky | Discord: `ck0i`
-- MIT License -- do what you want, no warranty.
