@@ -44,6 +44,8 @@ namespace {
         auto encoded = CW_MBA(100);
         auto balance = CW_POLY(1200);
         balance.rekey();
+        cloakwork::authenticated_value<uint64_t> verified_balance{1200};
+        verified_balance.set(1300);
 
         struct account { uint32_t id, flags; };
         account source{7, 3};
@@ -55,6 +57,7 @@ namespace {
                   << "  CW_INT after adding 8: " << number.get() << '\n'
                   << "  CW_MBA minus 50: " << CW_SUB(encoded.get(), 50) << '\n'
                   << "  CW_POLY after rekey: " << balance.get() << '\n'
+                  << "  authenticated value: " << verified_balance.get() << '\n'
                   << "  CW_SCATTER: id=" << restored.id << ", flags=" << restored.flags << '\n'
                   << "  stored comparison: " << allowed.get() << '\n'
                   << "  CW_CONST: 0x" << std::hex << CW_CONST(0xC10Au) << std::dec << '\n';
@@ -67,10 +70,13 @@ namespace {
     void calls_and_flow() {
         auto wrapped = CW_CALL(add);
         cloakwork::meta_func<int(int, int)> metamorphic(add);
+        constexpr auto policy = cloakwork::call_protection::encoded | cloakwork::call_protection::integrity;
+        cloakwork::protected_function<int(int, int), policy> checked(add, 1);
 
         std::cout << "\ncalls and control flow\n"
                   << "  CW_CALL: " << wrapped(19, 23) << '\n'
                   << "  meta_func: " << metamorphic(19, 23) << '\n'
+                  << "  composed call, entry-byte check: " << checked(19, 23) << '\n'
                   << "  CW_FLATTEN: " << CW_FLATTEN(add, 19, 23) << '\n';
 
         //

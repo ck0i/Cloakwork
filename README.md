@@ -1,405 +1,197 @@
 # Cloakwork
 
-Cloakwork is a single-header C++20 obfuscation library for Windows. Include `cloakwork.h` to use encoded strings and values, mixed Boolean arithmetic, control-flow wrappers, and an explicit integer bytecode VM. Existing Windows integration APIs remain available. MSVC auto-links the Windows libraries used by the header.
-
----
-
-## Quick Start
+Single-header C++20 obfuscation for Windows. Copy `cloakwork.h` into your project and include it. MSVC links the required Windows libraries automatically.
 
 ```cpp
 #include "cloakwork.h"
 ```
 
-```cpp
-// encrypted at compile-time, decrypted at runtime
-const char* secret = CW_STR("my secret string");
-```
+See [demo.cpp](demo.cpp) for a complete, runnable example.
+
+## Strings
 
 ```cpp
-// compile-time FNV-1a hash for API name hiding
-constexpr uint32_t hash = CW_HASH("kernel32.dll");
-constexpr uint32_t hash_ci = CW_HASH_CI("ntdll.dll");
+const char* text = CW_STR("config.toml");
+const char* layered = CW_STR_LAYERED("session token");
+const wchar_t* wide = CW_WSTR(L"wide text");
+
+auto local = CW_STR_STACK("temporary plaintext");
+consume(local.get());
 ```
 
-```cpp
-// obfuscated integer with random key encoding
-int key = CW_INT(0xDEAD);
-```
+`CW_STR`, `CW_STR_LAYERED`, and `CW_WSTR` return stable pointers. Their decoded text stays in memory after first use. `CW_STR_STACK` owns its buffer and wipes it when destroyed; keep it in a named variable.
+
+## Values and arithmetic
 
 ```cpp
-// resolve API without import table entry
-auto pVirtualAlloc = CW_IMPORT("kernel32.dll", VirtualAlloc);
+auto number = CW_INT(42);
+number.set(CW_ADD(number.get(), 8));
+
+auto encoded = CW_MBA(100);
+auto changing = CW_POLY(1200);
+changing.rekey();
+auto scattered = CW_SCATTER(uint64_t{123});
+cloakwork::rt_const<double> rate{0.25};
+int constant = CW_CONST(42);
 ```
 
-```cpp
-// apply the configured response if detected, or check as bool
-CW_ANTI_DEBUG();
-if (CW_CHECK_DEBUG()) { /* debugger present */ }
-```
+- Arithmetic: `CW_ADD(a, b)`, `CW_SUB(a, b)`, `CW_NEG(a)`.
+- Bitwise: `CW_AND(a, b)`, `CW_OR(a, b)`, `CW_XOR(a, b)`.
+- Comparisons: `CW_EQ`, `CW_NE`, `CW_LT`, `CW_GT`, `CW_LE`, `CW_GE`.
+- Booleans: `CW_TRUE`, `CW_FALSE`, `CW_BOOL(expr)`, `cloakwork::obf_bool`.
+
+Value wrappers support `.get()` and `.set()`; `rt_const<T>` exposes only `.get()` and conversion to `T`. `CW_SCATTER` accepts trivially copyable types. Arithmetic macros evaluate each operand once; integer addition, subtraction, and negation wrap at the result width.
+
+`CW_CONST` encodes the entire arithmetic constant, including floating-point and Boolean representations, using the same block encoding as strings.
+
+## Authenticated storage
 
 ```cpp
-// apply the configured response if detected, or check as bool
-CW_ANTI_VM();
-if (CW_CHECK_VM()) { /* virtualized */ }
+cloakwork::authenticated_value<uint64_t> balance{1200};
+balance.set(1300);
+uint64_t current = balance.get();
+
+std::array<uint8_t, 3> input{1, 2, 3};
+cloakwork::sealed_buffer buffer(input);
+buffer.with_plaintext([](std::span<const uint8_t> bytes) { consume(bytes); });
 ```
 
+These optional-use types require Windows 10 or later. They use CNG AES-256-GCM with a separate key per instance and 128-bit tags. Authentication failure throws `cloakwork::authentication_error` before the callback runs, regardless of the legacy detection-response setting. Provider failures throw; a failed update preserves the previous value. Instances cannot be copied or moved.
+
+The callback's byte span is borrowed and wiped afterward, including on exceptions; do not retain it. `export_state()` and `import_state(packet)` support authenticated state restoration to the same live instance. Cross-instance imports fail; restoring an older authentic packet is allowed. Keys and verifier state must remain trusted. Each instance permits at most `2^32 - 1` seal attempts and buffers up to `ULONG_MAX` bytes.
+
+## Calls and control flow
+
 ```cpp
-// wrap code in an encrypted state machine
-int result = CW_PROTECT(int, {
-    if (x > 10) return x * 2;
-    return x + 5;
+auto wrapped = CW_CALL(my_function);
+auto result = wrapped(arguments);
+
+int doubled = CW_PROTECT(int, {
+    return value * 2;
 });
+
+cloakwork::meta_func<int(int, int)> changing_call(add);
+int sum = changing_call(19, 23);
 ```
 
+Also available: `CW_FLATTEN(func, ...)`, `CW_PROTECT_VOID(body)`, `CW_IF(cond)` / `CW_ELSE`, `CW_BRANCH(cond)`, `CW_JUNK()`, and `CW_JUNK_FLOW()`.
+
+`CW_PROTECT` wraps a native C++ body; it does not convert that body into VM instructions. For explicit integer virtualization, use `cloakwork::vm::make_program`; [demo.cpp](demo.cpp) includes a working program and result handling.
+
+`CW_CALL` and metamorphic wrappers reject null functions. Metamorphic calls use Windows x64 executable thunks. Allocation or publication failures throw, as does calling a moved-from wrapper.
+
+Combine protections through the shared wrapper:
+
 ```cpp
-// indirect syscall via ntdll gadget (x64)
-NTSTATUS status = CW_SYSCALL(NtClose, handle);
+constexpr auto policy = cloakwork::call_protection::encoded | cloakwork::call_protection::integrity;
+cloakwork::protected_function<int(int, int), policy> checked_add(add, known_code_size);
 ```
 
----
+Add `call_protection::metamorphic` for changing x64 thunks. Requested protections must be enabled. Wrappers preserve reference returns, move-only arguments, and exception propagation. `CW_SPOOF_CALL` is now a compatibility alias for `CW_CALL`; it no longer edits return addresses or claims stack spoofing.
 
-## Configuration
-
-Define feature macros **before** including the header. All features are enabled by default.
-
-| Macro | Description | Default |
-|-------|-------------|---------|
-| `CW_ENABLE_ALL` | Master on/off switch | `1` |
-| `CW_ENABLE_STRING_ENCRYPTION` | Compile-time string encoding | `1` |
-| `CW_ENABLE_VALUE_OBFUSCATION` | Integer/value obfuscation and MBA | `1` |
-| `CW_ENABLE_CONTROL_FLOW` | Control flow obfuscation | `1` |
-| `CW_ENABLE_ANTI_DEBUG` | Anti-debugging features | `1` |
-| `CW_ENABLE_FUNCTION_OBFUSCATION` | Function pointer obfuscation | `1` |
-| `CW_ENABLE_DATA_HIDING` | Scattered/polymorphic values | `1` |
-| `CW_ENABLE_METAMORPHIC` | Metamorphic code generation | `1` |
-| `CW_ENABLE_COMPILE_TIME_RANDOM` | Compile-time random generation | `1` |
-| `CW_ENABLE_IMPORT_HIDING` | Dynamic API resolution | `1` |
-| `CW_ENABLE_SYSCALLS` | Direct syscall invocation | `1` |
-| `CW_ENABLE_ANTI_VM` | Anti-VM/sandbox detection | `1` |
-| `CW_ENABLE_INTEGRITY_CHECKS` | Code integrity verification | `1` |
-| `CW_BUILD_SEED` | Shared build seed for reproducible encodings | `0xC10A2026u` |
-| `CW_ANTI_DEBUG_RESPONSE` | Detection response: 0=ignore, 1=crash, 2=legacy no-op, 3=callback | `1` |
-| `CW_DETECTION_CALLBACK(reason)` | Host callback required by response mode 3 | Undefined |
-
-If you disable `CW_ENABLE_ALL` and selectively re-enable features, Cloakwork
-now emits compile-time errors for unsupported combinations. String encryption,
-value obfuscation, anti-debug, data hiding, control flow, metamorphic code,
-function obfuscation, and import hiding depend on `CW_ENABLE_COMPILE_TIME_RANDOM`.
-Function obfuscation and syscalls also depend on import hiding because they scan
-loaded PE images for gadgets and exports.
-
-### Host-controlled detection responses
-
-`CW_ANTI_DEBUG_RESPONSE` controls `CW_ANTI_DEBUG()`, `CW_ANTI_VM()`, the periodic
-debugger check in `CW_CALL`, and failures in `CW_INTEGRITY_CHECK`. Mode `1`
-remains the default for compatibility and terminates through Windows fail-fast.
-Mode `0` ignores detections. Mode `2` preserves the old no-op behavior; Cloakwork
-does not generate fake data in that mode.
-
-For host-controlled handling, select mode `3` and define a callback before
-including the header:
+## Debugger and VM checks
 
 ```cpp
-#include <cstdio>
+bool debugger = CW_CHECK_DEBUG();
+bool virtual_machine = CW_CHECK_VM();
 
+CW_ANTI_DEBUG();
+CW_ANTI_VM();
+```
+
+The `CW_CHECK_*` macros only return a result. `CW_ANTI_DEBUG()` and `CW_ANTI_VM()` terminate on detection by default. Set `CW_ANTI_DEBUG_RESPONSE` before including the header:
+
+- `0`: ignore detections.
+- `1`: fail-fast, the default.
+- `2`: legacy no-op.
+- `3`: call `CW_DETECTION_CALLBACK(reason)`.
+
+For a host-controlled response:
+
+```cpp
 namespace cloakwork { enum class detection_reason; }
 void on_detection(cloakwork::detection_reason reason);
 
 #define CW_ANTI_DEBUG_RESPONSE 3
 #define CW_DETECTION_CALLBACK(reason) on_detection(reason)
 #include "cloakwork.h"
+```
 
-void on_detection(cloakwork::detection_reason reason) {
-    std::fprintf(stderr, "Cloakwork detection: %d\n", static_cast<int>(reason));
+Define `on_detection` in your application. Reasons are `debugger`, `virtual_machine`, and `integrity_failure`. Returning allows execution to continue; throwing or terminating stops it. The callback runs on the detecting thread and must support concurrent calls if your application uses them.
+
+## Integrity checks
+
+```cpp
+auto checked = CW_INTEGRITY_CHECK(my_function, known_code_size);
+bool intact = checked.verify();
+auto result = checked(arguments);
+```
+
+Create the wrapper while the code is trusted and retain it for later calls. Supply a non-null function and a nonzero, readable byte range. Every call checks those bytes and uses the configured detection response on a mismatch. `.verify()` only returns a result.
+
+Reference bytes live in read-only pages. For several regions, `integrity::snapshot::capture({region_a, region_b})` packs byte spans into a shared read-only allocation and returns snapshots. Pass a snapshot as the second argument to an integrity-enabled `protected_function`. Unreadable or empty capture ranges are rejected. Read-only storage does not eliminate verification/execution races or protect against an attacker who can change page protections and verifier code.
+
+Other helpers: `CW_DETECT_HOOK(func)`, `CW_VERIFY_FUNCS(...)`, and `CW_COMPUTE_HASH(ptr, size)`.
+
+## Imports, hashes, and random values
+
+```cpp
+auto get_pid = CW_IMPORT("kernel32.dll", GetCurrentProcessId);
+if (get_pid) {
+    DWORD pid = get_pid();
 }
+
+constexpr uint32_t name_hash = CW_HASH_CI("kernel32.dll");
+constexpr auto build_value = CW_RANDOM_CT();
+auto runtime_value = CW_RANDOM_RT();
+int choice = CW_RAND_RT(1, 10);
 ```
 
-The reason is `cloakwork::detection_reason::debugger`, `virtual_machine`, or
-`integrity_failure`.
+- Imports: `CW_IMPORT_WIDE`, `CW_GET_MODULE(name)`, `CW_GET_PROC(module, func)`. Invalid images and unresolved or cyclic forwarders return `nullptr`; check pointers before calling.
+- Hashing: `CW_HASH`, `CW_HASH_CI`, `CW_HASH_WIDE`, `CW_HASH_WIDE_CI`, `CW_HASH_RT`, `CW_HASH_RT_CI`.
+- Random ranges: `CW_RAND_CT(min, max)` and `CW_RAND_RT(min, max)`, inclusive. Reversed bounds are rejected; distribution is not guaranteed uniform.
+- Syscalls on x64: `CW_SYSCALL_NUMBER(NtClose)` and `CW_SYSCALL(NtClose, handle)`. Check the returned syscall number or status for failure. Thunk allocation or publication failures return `STATUS_UNSUCCESSFUL`. Published pages stay read/execute; replaced pages remain alive through active calls, and thread exit clears the cache.
 
-The callback runs synchronously on the detecting thread, once per positive
-check. Returning lets the operation continue, including calling the wrapped
-function after an integrity failure. The host can instead terminate or, in
-user mode, throw an exception to stop the operation. Callback exceptions
-propagate to the caller. Callbacks must support concurrent calls if the host
-uses protected operations on multiple threads, and should avoid invoking
-response-producing checks recursively. Kernel callbacks run at the caller's
-IRQL and must obey its restrictions.
+With random support enabled, Windows user-mode runtime randomness uses the OS cryptographic provider and fails fast if it fails. Compile-time values use a deterministic build seed.
 
-Use the same response and callback definitions in every translation unit, with
-a shared callback declaration and one definition or an inline definition.
-Mode `3` without a callback is a compile-time error. `CW_CHECK_DEBUG()`,
-`CW_CHECK_VM()`, and `integrity_checked::verify()` remain result-only checks and
-never invoke the callback. Disabled checks do not invoke it either.
+## Configuration
 
----
-
-## API Reference
-
-### String Encryption
-
-| Macro | Description |
-|-------|-------------|
-| `CW_STR(s)` | Compile-time encoded string with a stable runtime plaintext cache |
-| `CW_STR_LAYERED(s)` | Two encoding passes with separate keys and a stable plaintext cache |
-| `CW_STR_STACK(s)` | Decrypt into an owning local buffer; wipe that buffer on destruction |
-| `CW_WSTR(s)` | Wide string (wchar_t) encryption |
-| `CW_STACK_STR(name, ...)` | Char-by-char initializer; the compiler may emit a literal |
-
-### String Hashing
-
-| Macro | Description |
-|-------|-------------|
-| `CW_HASH(s)` | Compile-time FNV-1a hash (case-sensitive) |
-| `CW_HASH_CI(s)` | Compile-time FNV-1a hash (case-insensitive) |
-| `CW_HASH_WIDE(s)` | Compile-time wide string hash |
-| `CW_HASH_WIDE_CI(s)` | Compile-time wide module-name hash for `CW_IMPORT_WIDE` |
-| `CW_HASH_RT(str)` | Runtime FNV-1a hash (case-sensitive) |
-| `CW_HASH_RT_CI(str)` | Runtime FNV-1a hash (case-insensitive) |
-
-### Value Obfuscation
-
-| Macro | Description |
-|-------|-------------|
-| `CW_INT(x)` | Obfuscated integer with random key encoding |
-| `CW_MBA(x)` | Mixed Boolean Arithmetic obfuscation |
-| `CW_CONST(x)` | Encrypted compile-time constant |
-| `CW_ADD(a, b)` | Obfuscated addition via MBA |
-| `CW_SUB(a, b)` | Obfuscated subtraction via MBA |
-| `CW_AND(a, b)` | Obfuscated bitwise AND via MBA |
-| `CW_OR(a, b)` | Obfuscated bitwise OR via MBA |
-| `CW_XOR(a, b)` | Obfuscated bitwise XOR via MBA |
-| `CW_NEG(a)` | Obfuscated negation via MBA |
-
-### Comparisons
-
-| Macro | Description |
-|-------|-------------|
-| `CW_EQ(a, b)` | Obfuscated equality (==) |
-| `CW_NE(a, b)` | Obfuscated not-equals (!=) |
-| `CW_LT(a, b)` | Obfuscated less-than (<) |
-| `CW_GT(a, b)` | Obfuscated greater-than (>) |
-| `CW_LE(a, b)` | Obfuscated less-or-equal (<=) |
-| `CW_GE(a, b)` | Obfuscated greater-or-equal (>=) |
-
-### Booleans
-
-| Macro | Description |
-|-------|-------------|
-| `CW_TRUE` | Opaque predicate that evaluates to true |
-| `CW_FALSE` | Opaque predicate that evaluates to false |
-| `CW_BOOL(expr)` | Obfuscate any boolean expression |
-
-### Control Flow
-
-| Macro | Description |
-|-------|-------------|
-| `CW_IF(cond)` | Obfuscated branching with opaque predicates |
-| `CW_ELSE` | Obfuscated else clause |
-| `CW_BRANCH(cond)` | Indirect branching with obfuscation |
-| `CW_FLATTEN(func, ...)` | Invoke a callable through a dispatcher |
-| `CW_PROTECT(ret_type, body)` | Invoke a native C++ body through a dispatcher |
-| `CW_PROTECT_VOID(body)` | Void variant of `CW_PROTECT` |
-| `CW_JUNK()` | Insert junk computation |
-| `CW_JUNK_FLOW()` | Insert junk with fake control flow |
-
-### Function Protection
-
-| Macro | Description |
-|-------|-------------|
-| `CW_CALL(func)` | Runtime-encoded function pointer with decoy arrays |
-| `CW_SPOOF_CALL(func)` | Call with spoofed return address |
-| `CW_RET_GADGET()` | Cached ret gadget in ntdll for return address spoofing |
-
-### Import Hiding
-
-| Macro | Description |
-|-------|-------------|
-| `CW_IMPORT(mod, func)` | Dynamic resolution without import table entry |
-| `CW_IMPORT_WIDE(mod, func)` | Wide string module variant |
-| `CW_GET_MODULE(name)` | Get module base via PEB walk |
-| `CW_GET_PROC(mod, func)` | Get export address by hash |
-
-### Direct Syscalls
-
-| Macro | Description |
-|-------|-------------|
-| `CW_SYSCALL_NUMBER(func)` | Extract syscall number with Halo's Gate fallback |
-| `CW_SYSCALL(func, ...)` | Indirect invocation via ntdll gadget (x64 only) |
-
-### Data Hiding
-
-| Macro | Description |
-|-------|-------------|
-| `CW_SCATTER(x)` | Heap-scattered data across multiple allocations |
-| `CW_POLY(x)` | Encoded arithmetic storage, rekeyed every 100 reads or explicitly with `.rekey()` |
-
-### Anti-Debug
-
-| Macro | Description |
-|-------|-------------|
-| `CW_ANTI_DEBUG()` | Applies the configured response if a debugger is detected |
-| `CW_CHECK_DEBUG()` | Returns bool, comprehensive multi-layer detection |
-| `CW_HIDE_THREAD()` | Hide thread from debugger (ThreadHideFromDebugger) |
-
-For granular checks, use the `cloakwork::anti_debug` namespace directly: `is_debugger_present()`, `has_hardware_breakpoints()`, `comprehensive_check()`, and `timing_check()`. The `advanced` sub-namespace contains hiding-tool, parent-process, kernel-debugger, timing, memory-breakpoint, and registry-artifact checks. The `enhanced` sub-namespace contains debug-port probing and thread hiding.
-
-### Anti-VM / Sandbox
-
-| Macro | Description |
-|-------|-------------|
-| `CW_ANTI_VM()` | Applies the configured response if a VM or sandbox is detected |
-| `CW_CHECK_VM()` | Returns bool |
-
-For individual checks, use `cloakwork::anti_debug::anti_vm`: hypervisor detection (CPUID), VM vendor string matching (VMware, VirtualBox, KVM, Xen, Parallels, QEMU), low resource detection, sandbox DLL detection, VM registry keys, VM MAC prefixes, and sandbox username/computer name detection. Hyper-V/VBS is treated as corroborating evidence rather than a standalone VM verdict to reduce false positives on modern bare-metal Windows.
-
-### Integrity
-
-| Macro | Description |
-|-------|-------------|
-| `CW_DETECT_HOOK(func)` | Check for hook patterns (jmp, push/ret, int3) at entry point |
-| `CW_INTEGRITY_CHECK(func, size)` | Integrity-checked function wrapper |
-| `CW_COMPUTE_HASH(ptr, size)` | Hash a memory region |
-| `CW_VERIFY_FUNCS(...)` | Verify multiple functions are not hooked |
-
-### PE / IAT
-
-| Macro | Description |
-|-------|-------------|
-| `CW_ERASE_PE_HEADER()` | Zero DOS/NT headers and section table to prevent dumping |
-| `CW_SCRUB_DEBUG_IMPORTS()` | Stub debug-related IAT entries (IsDebuggerPresent, etc.) |
-
-### Random
-
-| Macro | Description |
-|-------|-------------|
-| `CW_RANDOM_CT()` | Compile-time value derived from the build seed and expansion location |
-| `CW_RAND_CT(min, max)` | Compile-time random in range |
-| `CW_RANDOM_RT()` | Runtime random value (multi-source entropy) |
-| `CW_RAND_RT(min, max)` | Runtime random in range |
-
-### Template Classes
-
-- `cloakwork::obfuscated_value<T>` -- generic value obfuscation
-- `cloakwork::mba_obfuscated<T>` -- MBA-based obfuscation
-- `cloakwork::obfuscated_call<Func>` -- function pointer obfuscation
-- `cloakwork::meta_func<Sig>` -- metamorphic function wrapper (alias for `metamorphic_function<Sig>`)
-- `cloakwork::data_hiding::scattered_value<T, Chunks>` -- heap data scattering
-- `cloakwork::data_hiding::polymorphic_value<T>` -- polymorphic mutating value
-- `cloakwork::constants::runtime_constant<T>` -- runtime-keyed constant (alias: `cloakwork::rt_const<T>`)
-- `cloakwork::integrity::integrity_checked<Func>` -- integrity-checked function wrapper
-- `cloakwork::obf_bool` -- obfuscated boolean (multi-byte storage with opaque predicates)
-
----
-
-## Compatibility and storage contracts
-
-The public macro names remain available. Recompile all translation units after replacing the header; the class layouts have changed. Use the same feature definitions and `CW_BUILD_SEED` in every translation unit. The default seed is deterministic. For different encodings per release, set a new shared seed in the build configuration, for example `/DCW_BUILD_SEED=0x12AB34CDu`. The seed is not secret. Internal defaults no longer depend on include-time `__COUNTER__` state or compilation time.
-
-`CW_INT`, `CW_MBA`, and `CW_POLY` retain `.get()`, `.set()`, and implicit value conversion. Their reads and writes now use a mutex, and they support copying. This adds synchronization overhead. `CW_INT` and `CW_POLY` preserve floating-point representations, including negative zero and NaN payloads. Their encoded storage uses byte Feistel transforms; `CW_POLY` replaces its keys and encoded bytes without changing the decoded value. These value wrappers no longer perform implicit periodic debugger checks. Use the explicit anti-debug API when that behavior is required.
-
-`CW_ADD`, `CW_SUB`, `CW_AND`, `CW_OR`, `CW_XOR`, and `CW_NEG` evaluate each operand once. Integer promotions apply to macro results. Addition, subtraction, and negation wrap at the result width, including signed results; they do not use signed overflow internally. Direct typed `mba` helpers retain the requested width. Addition includes product-based variants with volatile intermediates. These expressions remain algebraically simplifiable. Comparisons preserve native mixed-type conversions and NaN ordering. `CW_RAND_CT` and `CW_RAND_RT` evaluate each bound once, support the full integer range, and reject reversed bounds. They use modulo mapping and are not guaranteed to be uniformly distributed.
-
-`CW_STR`, `CW_STR_LAYERED`, and `CW_WSTR` return a pointer that remains valid until the macro's static object is destroyed. After first use, that object's plaintext cache remains readable and is never rekeyed in place. The cache is wiped on destruction. The layered variant now performs two encoding passes instead of briefly rewriting plaintext while other callers might be reading it.
-
-Keep stack strings in a named variable:
+All features default to enabled. Set overrides before including `cloakwork.h` and use the same definitions in every translation unit:
 
 ```cpp
-auto secret = CW_STR_STACK("local plaintext");
-consume(secret.get());
-```
-
-The immutable static payload is decoded directly into `secret`, without populating a static plaintext cache. Its owned buffer is wiped on destruction. Copies own separate buffers. Getting a pointer from an unnamed temporary is now a compile error, preventing the common dangling-pointer form `const char* p = CW_STR_STACK("text");`. Wiping owned buffers cannot erase copies made by application code, registers, or the operating system.
-
-`CW_SCATTER` accepts trivially copyable types. It commits a replacement only after all allocations succeed. It does not prevent a process memory dump. Destroying any wrapper while another thread uses it remains invalid.
-
-`CW_FLATTEN` and `CW_PROTECT` preserve void, reference, and move-only returns, and propagate exceptions. A protected body remains native C++ inside a callable. Its internal branches are not converted into bytecode or flattened automatically. `CW_CALL` also accepts function-pointer variables and preserves reference returns. Metamorphic function calls retain ownership of an executable page until the call completes, so regeneration cannot free a page that another caller still uses. The initializer-list constructor continues to use the first function; empty lists are rejected when metamorphic protection is enabled.
-
-As before, disabling features can make their macros return raw values instead of wrappers. Do not depend on `.get()` when compiling those macros with their feature disabled. The explicit integer VM remains available in user mode even with `CW_ENABLE_ALL=0`; its execution semantics do not depend on the protection flags.
-
-## Integer virtualization
-
-Use `cloakwork::vm::make_program` for code you explicitly express as instructions. The VM has unsigned 64-bit registers, modular arithmetic, bitwise operations, rotation, comparison, and branches. It has no arbitrary memory access or native-call instruction.
-
-```cpp
-using cloakwork::vm::instruction;
-using op = cloakwork::vm::opcode;
-
-// Compute x * 2 + 5. Each instruction is {opcode, destination, a, b, immediate}.
-static constexpr auto calculation = cloakwork::vm::make_program<CW_RANDOM_CT()>(std::array{
-    instruction{op::argument, 0, 0, 0, 0},
-    instruction{op::constant, 1, 0, 0, 2},
-    instruction{op::mul, 0, 0, 1},
-    instruction{op::constant, 1, 0, 0, 5},
-    instruction{op::add, 0, 0, 1},
-    instruction{op::ret, 0, 0}
-});
-
-auto answer = calculation.run(std::array{uint64_t{10}});
-if (answer) consume(answer.value); // 25
-```
-
-The seed selects opcode numbering, register layout, and encoding masks for each instruction word. Programs are immutable and safe to run concurrently. Every run starts with zeroed registers and wipes its register array on exit. Opcode and register encodings are reversible, and decoded operands still exist during execution.
-
-`make_program<Seed, Registers>` defaults to 8 registers; valid counts are powers of two from 1 through 256. All register fields must be in range, including unused fields. `constant` loads `immediate`; `argument` loads the argument at that index. Binary operations read registers `a` and `b` into `dst`. `move` copies `a`. `less` performs unsigned comparison and writes 0 or 1. `rotate_left` uses the low 6 bits of `b`. `jump` sets the instruction index to `immediate`; `jump_zero` does so when register `a` is zero. `ret` returns register `a`.
-
-Construction rejects invalid opcodes, registers, branch targets, and programs without a return instruction at compile time. Unreachable returns are allowed, so runtime execution is bounded. `run(arguments, budget)` defaults to 100,000 instructions. The returned `result` contains `value`, `status`, and `steps`; check it before using `value`. Errors are `missing_argument`, `invalid_instruction`, and `step_limit`. Falling off the program is an error. Return instructions count toward the budget. This VM is not a security sandbox for hostile bytecode.
-
----
-
-## Kernel Mode
-
-I'd recommend you use my other library [Kernelcloak](https://github.com/ck0i/Kernelcloak) for kernel work, it is much more in depth and Cloakwork doesn't really suit kernel work as much as other libraries do. However, if you choose to still use Cloakwork, here you go:
-
-Kernel mode is selected by `_KERNEL_MODE` or forced with `#define CW_KERNEL_MODE 1`. Include the WDK headers first. This path has not been validated by the current tests.
-
-### Feature Availability
-
-| Feature | Kernel Mode | Reason |
-|---------|-------------|--------|
-| Compile-time random | Enabled | Pure consteval |
-| String hashing | Enabled | Pure consteval |
-| Anti-debug | Enabled | Kernel-specific techniques |
-| String encryption | No-op | Requires `atexit` for static destructors |
-| Value obfuscation | No-op | Requires C++20 concepts / `std::bit_cast` |
-| Control flow | No-op | Depends on value obfuscation |
-| Function obfuscation | No-op | Requires C++20 concepts |
-| Data hiding | No-op | Requires `std::unique_ptr` |
-| Metamorphic | No-op | Requires `std::initializer_list` |
-| Import hiding | No-op | PEB walking is usermode-only |
-| Anti-VM | No-op | Uses usermode APIs |
-| Integrity checks | No-op | Requires `VirtualQuery` |
-| Syscalls | No-op | Already in kernel |
-
-### Example
-
-```cpp
-#include <ntddk.h>
-#define CW_KERNEL_MODE 1
+#define CW_BUILD_SEED 0x12AB34CDu
+#define CW_ENABLE_ANTI_VM 0
 #include "cloakwork.h"
-
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
-    UNREFERENCED_PARAMETER(RegistryPath);
-
-    constexpr uint32_t hash = CW_HASH("NtClose");
-    constexpr uint32_t key = CW_RANDOM_CT();
-
-    if (cloakwork::anti_debug::comprehensive_check()) {
-        KeBugCheckEx(0xDEAD, 0, 0, 0, 0);
-    }
-
-    return STATUS_SUCCESS;
-}
 ```
 
-### Kernel Anti-Debug Techniques
+`CW_ENABLE_ALL` sets the default for individual switches. Available suffixes for `CW_ENABLE_` are:
 
-- **KdDebuggerEnabled** -- global flag set when kernel debugger is attached
-- **KdDebuggerNotPresent** -- inverse flag (false = debugger present)
-- **PsIsProcessBeingDebugged** -- per-process debug port check (dynamically resolved)
-- **Debug registers** -- direct `__readdr()` intrinsic for DR0-DR3 hardware breakpoints
-- **Timing analysis** -- `KeQueryPerformanceCounter` vs RDTSC for single-step detection
+```text
+STRING_ENCRYPTION    VALUE_OBFUSCATION    CONTROL_FLOW
+ANTI_DEBUG          FUNCTION_OBFUSCATION DATA_HIDING
+METAMORPHIC         COMPILE_TIME_RANDOM IMPORT_HIDING
+SYSCALLS            ANTI_VM             INTEGRITY_CHECKS
+```
 
-### Kernel Entropy Sources
+Unsupported feature combinations produce compile-time errors. MSVC also rejects linked translation units with different seed, feature, or detection-response definitions. Disabled macros may return raw values instead of wrappers, so `.get()` is only available with the corresponding feature enabled. Rebuild all translation units after updating the header or configuration.
 
-Runtime random in kernel mode combines: `__rdtsc()`, `PsGetCurrentProcess()`/`PsGetCurrentThread()` (KASLR), process/thread IDs, `KeQueryPerformanceCounter()`, `KeQuerySystemTime()`, `KeQueryInterruptTime()`, pool allocation addresses, and stack addresses. Mixed via xorshift64*.
+## Build the demo
+
+Place `cloakwork.h` and `demo.cpp` in the same directory. From an x64 Visual Studio developer terminal with a recent MSVC toolset and Windows SDK:
+
+```powershell
+cl /std:c++20 /EHsc /O2 demo.cpp /Fe:cloakwork_demo.exe
+.\cloakwork_demo.exe
+```
+
+## Release seeds
+
+Set `CW_BUILD_SEED` to a chosen 32-bit value for each release. You can define it in your source before including the header or pass it to the compiler:
+
+```powershell
+cl /std:c++20 /EHsc /O2 /DCW_BUILD_SEED=0x12AB34CDu demo.cpp /Fe:cloakwork_demo.exe
+```
+
+Use identical definitions across translation units and record the seed with your release's source revision and build settings. Reusing them reproduces the compile-time diversification inputs. Exact binary reproduction also depends on source paths, toolchain, and linker settings.
+
+For kernel work, use [Kernelcloak](https://github.com/ck0i/Kernelcloak). Cloakwork's limited kernel path requires WDK headers before this header.
